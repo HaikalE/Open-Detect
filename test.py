@@ -1,144 +1,241 @@
 import argparse
+import json
+import math
 import os
-import time
+
 import numpy as np
 import torch
-from sklearn.metrics import roc_auc_score, roc_curve
-from torch.utils.data import DataLoader, SubsetRandomSampler
-from data.dataset import get_dataset
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_recall_fscore_support,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+from torch.utils.data import DataLoader
+
+from data.dataset import get_dataset_splits
 from data.splits import get_splits
-from utils import  setup_seed
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.metrics import precision_recall_fscore_support, confusion_matrix, classification_report
-import matplotlib.pyplot as plt
 from model import OpenDetectNet
+from utils import setup_seed
 
-def get_output(model, data_loader):
-    z = []
-    dists = []
+
+def get_output(model, data_loader, device=None):
+    """Return labels, minimum KL score, and nearest-prototype predictions."""
+    if device is None:
+        device = next(model.parameters()).device
+
     labels = []
-    kl_divs = []
-    with torch.no_grad():
-        for images, label in data_loader:
-            images = images.cuda()
-            z_iter, dist_iter, kl_div_iter, _ = model(images)
-            z.extend(z_iter.cpu().data.numpy())
-            dists.extend(dist_iter.cpu().data.numpy())
-            kl_divs.extend(kl_div_iter.cpu().data.numpy())
-            labels.extend(label.data.numpy())
-    z = np.array(z)
-    dists = np.array(dists)
-    kl_divs = np.array(kl_divs)
-    labels = np.array(labels)
-    # dist
-    dist_reshape = dists.reshape((len(dists), model.n_classes, 1)) 
-    dist_class_min = dist_reshape.min(2)  # min dist in each class
-    dist_min = np.min(dist_class_min, 1)
-    dist_pred = np.argmin(dist_class_min, 1)
-    # kl_div
-    kld_reshape = kl_divs.reshape((len(dists), model.n_classes, 1)) 
-    kld_class_min = kld_reshape.min(2)  # min kld in each class
-    kld_min = np.min(kld_class_min, 1)
-    kld_pred = np.argmin(kld_class_min, 1)
-
-    return z, labels, dist_min, kld_min, dist_pred, kld_pred
-
-def auroc_score(inner_score, open_score, args):  
-    y_true = np.array([0] * len(inner_score) + [1] * len(open_score))
-    y_score = np.concatenate([inner_score, open_score])
-    auc_score = roc_auc_score(y_true, y_score)
-    fpr, tpr, thresholds = roc_curve(y_true, y_score)
-    maxindex = (tpr-fpr).tolist().index(max(tpr-fpr))
-    opt_threshold = thresholds[maxindex]
-    
-    y_pred = (y_score >= opt_threshold).astype(int)
-    accuracy = accuracy_score(y_true, y_pred)
-    precision = precision_score(y_true, y_pred)
-    recall = recall_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
-
-    print('*'*50)
-    print('Open-world AUROC Score')
-    print('avg known score: {:.04f}, avg unknown score: {:.04f}, AUROC score {:.04f}'.format(
-        np.mean(inner_score), np.mean(open_score), auc_score))
-    
-    print('Optimal threshold: {:.04f}'.format(opt_threshold))
-    print('Accuracy: {:.04f}'.format(accuracy))
-    print('Precision: {:.04f}'.format(precision))
-    print('Recall: {:.04f}'.format(recall))
-    print('F1 Score: {:.04f}'.format(f1))
-    print('*'*50)
-
-
-    return auc_score
-
-def inner_acc(pred_inner, labels_inner):
-    inner_corrects = np.sum(pred_inner == labels_inner)
-    inner_num = len(labels_inner)
-    acc = inner_corrects / inner_num
-    print('*'*50)
-    print('Closed-world Classification Performance')
-    print('inner corrects: {} inner samples: {} inner accuracy {}'.format(
-            inner_corrects, inner_num, inner_corrects / inner_num))
-    
-    precision, recall, f1, _ = precision_recall_fscore_support(labels_inner, pred_inner, average='weighted')
-    print('Overall Precision: {:.4f}'.format(precision))
-    print('Overall Recall: {:.4f}'.format(recall))
-    print('Overall F1 Score: {:.4f}'.format(f1))
-
-    return acc
-
-def test_openset(model, inner_loader, open_loader, args):
+    scores = []
+    predictions = []
     model.eval()
-    model = model.cuda()
-    z_inner, inner_label, _, inner_score, _, inner_pred = get_output(model, inner_loader)
-    z_open, open_label, _, open_score, _, open_pred = get_output(model, open_loader)
-    acc = inner_acc(inner_pred, inner_label)
-    auroc = auroc_score(inner_score, open_score, args)
-    return acc, auroc
+    with torch.no_grad():
+        for images, batch_labels in data_loader:
+            images = images.to(device)
+            _, _, kl_divergences, _ = model(images)
+            batch_scores, batch_predictions = torch.min(kl_divergences, dim=1)
+            labels.append(batch_labels.cpu().numpy())
+            scores.append(batch_scores.cpu().numpy())
+            predictions.append(batch_predictions.cpu().numpy())
+
+    if not labels:
+        raise ValueError('Cannot evaluate an empty dataset')
+    return (
+        np.concatenate(labels),
+        np.concatenate(scores),
+        np.concatenate(predictions),
+    )
+
+
+def threshold_from_known_validation(known_validation_scores, known_acceptance=0.95):
+    """Choose a threshold that accepts at least 95% of known validation samples.
+
+    Equations 21-22 use a strict ``score < threshold`` known decision, so the
+    returned value is the next representable float above the selected score.
+    Unknown samples are deliberately not used when choosing the threshold.
+    """
+    scores = np.asarray(known_validation_scores, dtype=np.float64).reshape(-1)
+    if not len(scores):
+        raise ValueError('known_validation_scores must not be empty')
+    if not 0 < known_acceptance <= 1:
+        raise ValueError('known_acceptance must be in the interval (0, 1]')
+
+    rank = max(1, math.ceil(known_acceptance * len(scores)))
+    selected_score = np.partition(scores, rank - 1)[rank - 1]
+    return float(np.nextafter(selected_score, np.inf))
+
+
+def closed_world_metrics(labels, predictions):
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        labels,
+        predictions,
+        average='weighted',
+        zero_division=0,
+    )
+    return {
+        'closed_accuracy': float(accuracy_score(labels, predictions)),
+        'closed_precision': float(precision),
+        'closed_recall': float(recall),
+        'closed_f1': float(f1),
+    }
+
+
+def open_world_metrics(known_scores, unknown_scores, threshold):
+    """Evaluate known=0 versus unknown=1 using the fixed validation threshold."""
+    y_true = np.concatenate([
+        np.zeros(len(known_scores), dtype=np.int64),
+        np.ones(len(unknown_scores), dtype=np.int64),
+    ])
+    y_score = np.concatenate([known_scores, unknown_scores])
+    y_pred = (y_score >= threshold).astype(np.int64)
+    return {
+        'auroc': float(roc_auc_score(y_true, y_score)),
+        'open_accuracy': float(accuracy_score(y_true, y_pred)),
+        'open_precision': float(precision_score(y_true, y_pred, zero_division=0)),
+        'open_recall': float(recall_score(y_true, y_pred, zero_division=0)),
+        'open_f1': float(f1_score(y_true, y_pred, zero_division=0)),
+        'known_test_acceptance': float(np.mean(known_scores < threshold)),
+        'unknown_test_rejection': float(np.mean(unknown_scores >= threshold)),
+    }
+
+
+def evaluate_openset(
+    model,
+    validation_loader,
+    known_test_loader,
+    unknown_test_loader,
+    known_acceptance=0.95,
+):
+    device = next(model.parameters()).device
+    _, validation_scores, _ = get_output(model, validation_loader, device)
+    known_labels, known_scores, known_predictions = get_output(model, known_test_loader, device)
+    _, unknown_scores, _ = get_output(model, unknown_test_loader, device)
+
+    threshold = threshold_from_known_validation(validation_scores, known_acceptance)
+    metrics = closed_world_metrics(known_labels, known_predictions)
+    metrics.update(open_world_metrics(known_scores, unknown_scores, threshold))
+    metrics.update({
+        'threshold': threshold,
+        'validation_known_acceptance': float(np.mean(validation_scores < threshold)),
+        'known_validation_samples': int(len(validation_scores)),
+        'known_test_samples': int(len(known_scores)),
+        'unknown_test_samples': int(len(unknown_scores)),
+    })
+    return metrics
+
+
+def checkpoint_path(args):
+    if args.model_path:
+        return args.model_path
+    return os.path.join(
+        args.save_dir,
+        '{}_split_{}_fold_{}.pt'.format(args.dset, args.split, args.fold),
+    )
+
+
+def load_model(path, device):
+    try:
+        checkpoint = torch.load(path, map_location=device, weights_only=True)
+    except TypeError:
+        checkpoint = torch.load(path, map_location=device)
+    if not isinstance(checkpoint, dict) or 'model_state_dict' not in checkpoint:
+        raise ValueError(
+            'Unsupported checkpoint format: {}. Retrain it with the updated train.py.'.format(path)
+        )
+
+    config = checkpoint['model_config']
+    model = OpenDetectNet(
+        config['arch'],
+        config['channel'],
+        config['latent_dim'],
+        config['n_classes'],
+        config['temp_inter'],
+        config.get('temp_intra', 1.0),
+        init=False,
+    ).to(device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    return model, checkpoint
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description='Evaluate paper-aligned Open-Detect')
+    parser.add_argument('--dset', default='mal', choices=['mal', 'USTC', 'combined_USTC_mal'])
+    parser.add_argument('--split', type=int, default=0, help='unknown-class scenario index')
+    parser.add_argument('--fold', type=int, default=0, help='0-based repeated split index')
+    parser.add_argument('--seed', type=int, default=2022)
+    parser.add_argument('--known_acceptance', type=float, default=0.95)
+    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--gpu', type=int, default=0, help='GPU index; use -1 for CPU')
+    parser.add_argument('--save_dir', default='./save_model')
+    parser.add_argument('--model_path', default=None)
+    parser.add_argument('--metrics_out', default=None)
+    return parser
+
+
+def evaluate(args):
+    if args.gpu >= 0:
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
+    device = torch.device('cuda' if args.gpu >= 0 and torch.cuda.is_available() else 'cpu')
+    split_seed = args.seed + args.fold
+    setup_seed(split_seed)
+
+    known_classes, unknown_classes, known_dataset, unknown_dataset = get_splits(
+        args.dset,
+        num_split=args.split,
+    )
+    _, validation_set, known_test_set = get_dataset_splits(
+        known_dataset,
+        select_classes=known_classes,
+        target_transform='reindex',
+        seed=split_seed,
+    )
+    _, _, unknown_test_set = get_dataset_splits(
+        unknown_dataset,
+        select_classes=unknown_classes,
+        target_transform='open',
+        seed=split_seed,
+    )
+
+    loader_args = {
+        'batch_size': args.batch_size,
+        'shuffle': False,
+        'num_workers': args.num_workers,
+        'drop_last': False,
+    }
+    validation_loader = DataLoader(validation_set, **loader_args)
+    known_test_loader = DataLoader(known_test_set, **loader_args)
+    unknown_test_loader = DataLoader(unknown_test_set, **loader_args)
+
+    path = checkpoint_path(args)
+    model, checkpoint = load_model(path, device)
+    if checkpoint and checkpoint.get('known_classes') != known_classes:
+        raise ValueError('Checkpoint known classes do not match the selected scenario')
+
+    metrics = evaluate_openset(
+        model,
+        validation_loader,
+        known_test_loader,
+        unknown_test_loader,
+        known_acceptance=args.known_acceptance,
+    )
+    metrics.update({
+        'dataset': args.dset,
+        'scenario_split': args.split,
+        'fold': args.fold,
+        'split_seed': split_seed,
+        'checkpoint': path,
+    })
+
+    print(json.dumps(metrics, indent=2, sort_keys=True))
+    if args.metrics_out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.metrics_out)), exist_ok=True)
+        with open(args.metrics_out, 'w', encoding='utf-8') as output_file:
+            json.dump(metrics, output_file, indent=2, sort_keys=True)
+            output_file.write('\n')
+    return metrics
 
 
 if __name__ == '__main__':
-    """
-    USTC 0, 1, 2
-    mal  0, 1, 2
-    combined_USTC_mal 0, 1
-    """
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--dset', default='USTC', help='dataset') 
-    parser.add_argument('--split', type=int, default=10, help='unknown splits')
-    parser.add_argument('--gpu', type=int, default=0, help='gpu device')
-    
-    DATASETS = [
-    'mal',
-    'USTC',
-    'combined_USTC_mal'
-    ]
-
-    setup_seed(2021)
-    args, _ = parser.parse_known_args()
-    os.environ["CUDA_VISIBLE_DEVICES"] = '%s' %args.gpu
-
-    known_classes, unknown_classes, known_dataset, unknown_dataset = get_splits(args.dset, num_split=args.split)
-
-    print('Unknown Detection Result')
-    print('Dataset: {}    Split: {}'.format(args.dset, args.split))
-
-    inner_set = get_dataset(known_dataset, False, known_classes, 'reindex')
-    open_set = get_dataset(unknown_dataset, False, unknown_classes, 'open')
-    print(len(inner_set), len(open_set))
-    
-    num_samples = min(len(open_set), len(inner_set))
-    if len(inner_set) < num_samples:
-        raise ValueError(f"inner_set contains only {len(inner_set)} samples, but requested {num_samples}.")
-    random_indices = np.random.choice(len(inner_set), size=num_samples, replace=False)
-    inner_sampler = SubsetRandomSampler(random_indices)
-    inner_loader = DataLoader(inner_set, batch_size=num_samples, sampler=inner_sampler, num_workers=4)
-
-
-    open_loader = DataLoader(open_set, batch_size=1000, shuffle=False, num_workers=4)
-    
-    model_dir = './save_model/{}_split_{}.pt'.format(args.dset, args.split)
-    model = torch.load(model_dir)
-
-    acc, auroc = test_openset(model, inner_loader, open_loader, args)
+    evaluate(build_parser().parse_args())

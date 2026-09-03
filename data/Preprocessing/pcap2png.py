@@ -1,6 +1,9 @@
 import os
 from tqdm import tqdm
-from utils import read_pcap_list
+try:
+    from .utils import read_pcap_list
+except ImportError:
+    from utils import read_pcap_list
 import json
 from PIL import Image
 import numpy as np
@@ -85,4 +88,3 @@ if __name__ == "__main__":
     if success_count > 0:
         print(f"Total time: {duration:.2f} seconds")
         print(f"Processing speed: {success_count/duration:.2f} files/second")
-    

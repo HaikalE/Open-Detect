@@ -1,13 +1,12 @@
 import numpy as np
 from sklearn.model_selection import train_test_split
-from torchvision import datasets, transforms
+from torchvision import transforms
 from torch.utils.data import Dataset
 from PIL import Image
-import subprocess
 import os
 import torchvision
 
-data_dir = './data'
+data_dir = os.path.dirname(os.path.abspath(__file__))
 mean = [0.5]
 std = [0.5]
 
@@ -35,6 +34,117 @@ class dataset_transform(Dataset):
         return len(self.indices)
 
 
+class TrafficArrayDataset(Dataset):
+    """Dataset wrapper used by the paper-aligned 8:1:1 split."""
+
+    def __init__(self, data, targets, transform=None, select_classes=None, target_transform=None):
+        self.data = np.asarray(data)
+        self.targets = np.asarray(targets)
+        self.transform = transform
+        self.target_transform = target_transform
+        if select_classes is None:
+            select_classes = sorted(np.unique(self.targets).tolist())
+        self.transform_dict = {label: index for index, label in enumerate(select_classes)}
+
+    def __getitem__(self, idx):
+        image = Image.fromarray(self.data[idx].astype(np.uint8))
+        if self.transform is not None:
+            image = self.transform(image)
+        label = int(self.targets[idx])
+        if self.target_transform == 'reindex':
+            label = self.transform_dict[label]
+        elif self.target_transform == 'open':
+            label = 999
+        return image, label
+
+    def __len__(self):
+        return len(self.targets)
+
+
+DATASET_FILES = {
+    'mal': ('mal_32_1c_train.npz', 'mal_32_1c_test.npz'),
+    'USTC': ('USTC_1c_train.npz', 'USTC_1c_test.npz'),
+    'combined_USTC_mal': ('combined_train_data.npz', 'combined_test_data.npz'),
+}
+
+
+def _load_npz_arrays(dataset):
+    """Load and combine the repository's existing train/test NPZ files."""
+    if dataset not in DATASET_FILES:
+        raise ValueError('Unsupported dataset: ' + dataset)
+
+    arrays = []
+    targets = []
+    for filename in DATASET_FILES[dataset]:
+        path = os.path.join(data_dir, 'dataset', filename)
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                '{} is required. Download the dataset and place it in data/dataset.'.format(path)
+            )
+        loaded = np.load(path)
+        arrays.append(np.asarray(loaded['data']))
+        targets.append(np.asarray(loaded['target']))
+
+    data = np.vstack(arrays).reshape(-1, 32, 32)
+    labels = np.concatenate(targets).astype(np.int64)
+    return data, labels
+
+
+def stratified_split_indices(targets, seed=2022):
+    """Return disjoint stratified train/validation/test indices in an 8:1:1 ratio."""
+    targets = np.asarray(targets)
+    indices = np.arange(len(targets))
+    train_indices, holdout_indices = train_test_split(
+        indices,
+        test_size=0.2,
+        random_state=seed,
+        stratify=targets,
+    )
+    val_indices, test_indices = train_test_split(
+        holdout_indices,
+        test_size=0.5,
+        random_state=seed + 1,
+        stratify=targets[holdout_indices],
+    )
+    return train_indices, val_indices, test_indices
+
+
+def get_dataset_splits(dataset, select_classes=None, target_transform=None, seed=2022):
+    """Create paper-aligned train/validation/test datasets.
+
+    The two distributed NPZ partitions are first combined, then re-split with
+    class stratification into 80% training, 10% validation, and 10% testing.
+    """
+    data, targets = _load_npz_arrays(dataset)
+    if select_classes is not None:
+        mask = np.isin(targets, np.asarray(select_classes))
+        data = data[mask]
+        targets = targets[mask]
+
+    train_indices, val_indices, test_indices = stratified_split_indices(targets, seed=seed)
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+    ])
+    transform_eval = transforms.Compose([transforms.ToTensor()])
+
+    dataset_args = {
+        'select_classes': select_classes,
+        'target_transform': target_transform,
+    }
+    train_set = TrafficArrayDataset(
+        data[train_indices], targets[train_indices], transform=transform_train, **dataset_args
+    )
+    val_set = TrafficArrayDataset(
+        data[val_indices], targets[val_indices], transform=transform_eval, **dataset_args
+    )
+    test_set = TrafficArrayDataset(
+        data[test_indices], targets[test_indices], transform=transform_eval, **dataset_args
+    )
+    return train_set, val_set, test_set
+
+
 class OPENWORLDmal(torchvision.datasets.CIFAR10):
 
     def __init__(self, root, train=True, labeled_num=5, labeled_ratio=0.5, rand_number=0, transform=None, target_transform=None,
@@ -42,12 +152,12 @@ class OPENWORLDmal(torchvision.datasets.CIFAR10):
         super(OPENWORLDmal, self).__init__(root, train, transform, target_transform, download=True)
 
         if train:
-            loaded_data = np.load(r'data/dataset/mal_32_1c_train.npz')
+            loaded_data = np.load(os.path.join(data_dir, 'dataset', 'mal_32_1c_train.npz'))
             self.data = loaded_data['data']
             self.targets = loaded_data['target']
             self.data = np.vstack(self.data).reshape(-1, 32, 32)
         else:
-            loaded_data = np.load(r'data/dataset/mal_32_1c_test.npz')
+            loaded_data = np.load(os.path.join(data_dir, 'dataset', 'mal_32_1c_test.npz'))
             self.data = loaded_data['data']
             self.targets = loaded_data['target']
             self.data = np.vstack(self.data).reshape(-1, 32, 32)
@@ -59,12 +169,12 @@ class combined_USTC_mal(torchvision.datasets.CIFAR10):
                  download=False, unlabeled_idxs=None):
         super(combined_USTC_mal, self).__init__(root, train, transform, target_transform, download=False)
         if train:
-            loaded_data = np.load(r'data/dataset/combined_train_data.npz')
+            loaded_data = np.load(os.path.join(data_dir, 'dataset', 'combined_train_data.npz'))
             self.data = loaded_data['data']
             self.targets = loaded_data['target']
             self.data = np.vstack(self.data).reshape(-1, 32, 32)
         else:
-            loaded_data = np.load(r'data/dataset/combined_test_data.npz')
+            loaded_data = np.load(os.path.join(data_dir, 'dataset', 'combined_test_data.npz'))
             self.data = loaded_data['data']
             self.targets = loaded_data['target']
             self.data = np.vstack(self.data).reshape(-1, 32, 32)
@@ -76,12 +186,12 @@ class USTC(torchvision.datasets.CIFAR10):
         super(USTC, self).__init__(root, train, transform, target_transform, download=False)
 
         if train:
-            loaded_data = np.load(r'data/dataset/USTC_1c_train.npz')
+            loaded_data = np.load(os.path.join(data_dir, 'dataset', 'USTC_1c_train.npz'))
             self.data = loaded_data['data']
             self.targets = loaded_data['target']
             self.data = np.vstack(self.data).reshape(-1, 32, 32)
         else:
-            loaded_data = np.load(r'data/dataset/USTC_1c_test.npz')
+            loaded_data = np.load(os.path.join(data_dir, 'dataset', 'USTC_1c_test.npz'))
             self.data = loaded_data['data']
             self.targets = loaded_data['target']
             self.data = np.vstack(self.data).reshape(-1, 32, 32)

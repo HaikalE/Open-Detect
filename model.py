@@ -5,7 +5,7 @@ from networks import net
 
 
 class OpenDetectNet(nn.Module):
-    def __init__(self, arch='resnet18', channel=3, latent_dim=128, n_classes=10, temp_inter=0.1, temp_intra=1, init=True):
+    def __init__(self, arch='resnet18', channel=3, latent_dim=128, n_classes=10, temp_inter=1.0, temp_intra=1, init=True):
         super(OpenDetectNet, self).__init__()
         self.arch = arch
         self.channel = channel
@@ -14,7 +14,9 @@ class OpenDetectNet(nn.Module):
         self.temp_inter = temp_inter
         self.temp_intra = temp_intra
         self.encoder, self.decoder = net(self.arch, self.channel, self.latent_dim)
-        self.prototypes = nn.Parameter(torch.randn(self.n_classes, self.latent_dim).cuda(), requires_grad=True)
+        # Keep parameters device agnostic. The caller moves the complete model
+        # to CUDA or CPU with model.to(device).
+        self.prototypes = nn.Parameter(torch.randn(self.n_classes, self.latent_dim), requires_grad=True)
         if init:
             nn.init.kaiming_normal_(self.prototypes)
 
@@ -48,28 +50,29 @@ class OpenDetectNet(nn.Module):
         return latent_z, dist, kl_div, recon_x
 
     def loss(self, x, y):
-        latent_z, dist, kl_div, x_recon = self.forward(x)
-        # Predict class by nearest prototype
-        dist_reshape = dist.view(len(x), self.n_classes, 1)
-        dist_class_min, _ = torch.min(dist_reshape, dim=2)
-        _, preds = torch.min(dist_class_min, dim=1)
-        # Distance and KL to ground-truth class prototypes
+        latent_z, _, kl_div, x_recon = self.forward(x)
+
+        # Equations 17-18 classify samples using the KL divergence between
+        # q(z|x)=N(mu_x, sigma_x) and every Gaussian prototype N(mu_y, I).
+        preds = torch.argmin(kl_div, dim=1)
+
+        # KL divergence to the ground-truth class prototype (Eq. 15).
         y_one_hot = F.one_hot(y, num_classes=self.n_classes).bool()
-        dist_y = dist[y_one_hot].view(len(dist), 1)
         kl_div_y = kl_div[y_one_hot].view(len(kl_div), 1)
-        q_w_z_y = F.softmax(-dist_y / self.temp_intra, dim=1)
-        # Reconstruction loss (MSE)
+
+        # Generative constraint (Eq. 13): reconstruction + conditional KL.
         rec_loss = F.mse_loss(x_recon, x)
-        # Conditional prior KL loss
-        q_w_z_y = torch.clamp(q_w_z_y, min=1e-7)
-        kld_loss = torch.mean(torch.sum(q_w_z_y * kl_div_y, dim=1))
-        # Entropy loss
-        ent_loss = torch.mean(torch.sum(q_w_z_y * torch.log(q_w_z_y * self.n_classes), dim=1))
-        # Discriminative loss (logsumexp)
-        LSE_all_dist = torch.logsumexp(-dist / self.temp_inter, 1)
-        LSE_target_dist = torch.logsumexp(-dist_y / self.temp_inter, 1)
-        dis_loss = torch.mean(LSE_all_dist - LSE_target_dist)
-        loss = {'dis': dis_loss, 'rec': rec_loss, 'kld': kld_loss, 'ent': ent_loss}
+        kld_loss = kl_div_y.mean()
+
+        # Discriminative constraint (Eq. 18): negative log q(y|x), where
+        # q(y|x) is a softmax over negative KL divergences to all prototypes.
+        if self.temp_inter <= 0:
+            raise ValueError('temp_inter must be greater than zero')
+        class_logits = -kl_div / self.temp_inter
+        dis_loss = F.cross_entropy(class_logits, y)
+
+        # The paper does not add a separate entropy term to Eq. 13 or Eq. 20.
+        loss = {'dis': dis_loss, 'rec': rec_loss, 'kld': kld_loss}
         return latent_z, x_recon, preds, loss
 
 
@@ -83,10 +86,11 @@ def train_model(model, args, train_loader, epoch, optimizer):
     train_corrects = 0
     running_loss = {}
     for i, (image, label) in enumerate(train_loader):
-        image, label = image.cuda(), label.cuda()
+        device = next(model.parameters()).device
+        image, label = image.to(device), label.to(device)
         optimizer.zero_grad()
         _, _, preds, loss = model.loss(image, label)
-        total_loss = args.lamda * (loss['rec'] + loss['kld'] + loss['ent']) + (1 - args.lamda) * loss['dis']
+        total_loss = args.lamda * (loss['rec'] + loss['kld']) + (1 - args.lamda) * loss['dis']
         loss['total'] = total_loss
         total_loss.backward()
         optimizer.step()
@@ -97,32 +101,33 @@ def train_model(model, args, train_loader, epoch, optimizer):
     train_loss = {k: running_loss.get(k, 0) / len(train_loader) for k in running_loss.keys()}
     print('Train corrects: {} Train samples: {} Train accuracy: {}'.format(
         train_corrects, len(train_loader.dataset), train_acc))
-    print('Train loss: {:.3f}= {}*[rec({:.3f}) + kld({:.3f}) + ent({:.3f})] + (1-{})*dis({:.3f})'.format(
+    print('Train loss: {:.3f}= {}*[rec({:.3f}) + kld({:.3f})] + (1-{})*dis({:.3f})'.format(
         train_loss['total'], args.lamda, train_loss['rec'], train_loss['kld'],
-        train_loss['ent'], args.lamda, train_loss['dis']))
+        args.lamda, train_loss['dis']))
 
 
 def validate_model(model, args, val_loader, epoch):
     # Validation loop for one epoch
     model.eval()
     val_corrects = 0.0
-    val_running_loss = {'total': 0.0, 'rec': 0.0, 'kld': 0.0, 'ent': 0.0, 'dis': 0.0}
+    val_running_loss = {'total': 0.0, 'rec': 0.0, 'kld': 0.0, 'dis': 0.0}
     for image, label in val_loader:
         with torch.no_grad():
-            image, label = image.cuda(), label.cuda()
+            device = next(model.parameters()).device
+            image, label = image.to(device), label.to(device)
             latent_z, x_recon, preds, loss = model.loss(image, label)
-            total_loss = args.lamda * (loss['rec'] + loss['kld'] + loss['ent']) + (1 - args.lamda) * loss['dis']
+            total_loss = args.lamda * (loss['rec'] + loss['kld']) + (1 - args.lamda) * loss['dis']
             loss['total'] = total_loss
             for k in loss.keys():
                 val_running_loss[k] = loss.get(k, 0).item() + val_running_loss.get(k, 0)
             val_corrects += torch.sum(preds == label.data)
-    val_acc = val_corrects / len(val_loader.dataset)
+    val_acc = val_corrects.item() / len(val_loader.dataset)
     val_loss = {k: val_running_loss.get(k, 0) / len(val_loader) for k in val_running_loss.keys()}
     print('Val corrects: {} Val samples: {} Val accuracy: {}'.format(
         val_corrects, len(val_loader.dataset), val_acc))
-    print('Val loss: {:.3f}= {}*[rec({:.3f}) + kld({:.3f}) + ent({:.3f})] + (1-{})*dis({:.3f})'.format(
+    print('Val loss: {:.3f}= {}*[rec({:.3f}) + kld({:.3f})] + (1-{})*dis({:.3f})'.format(
         val_loss['total'], args.lamda, val_loss['rec'], val_loss['kld'],
-        val_loss['ent'], args.lamda, val_loss['dis']))
+        args.lamda, val_loss['dis']))
     print('*' * 70)
     return val_acc
 
