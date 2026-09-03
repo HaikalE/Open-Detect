@@ -1,7 +1,6 @@
 import numpy as np
 import torch.nn as nn
 import torch
-from sklearn.cluster import KMeans
 
 
 def weight_init(m):
@@ -16,10 +15,11 @@ def weight_init(m):
 
 def setup_seed(seed):
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     torch.backends.cudnn.deterministic = True
-    
+    torch.backends.cudnn.benchmark = False
 
 
 def extract_features(model, data_loader):
@@ -27,10 +27,11 @@ def extract_features(model, data_loader):
     features = []
     targets = []
     model.eval()
+    device = next(model.parameters()).device
     print('extracting train features')
-    with  torch.no_grad():
-        for (image, label,) in data_loader:
-            image= image.cuda()
+    with torch.no_grad():
+        for image, label in data_loader:
+            image = image.to(device)
             latent_z, _, _ = model.encoder(image)
             features.append(latent_z)
             targets.append(label)
@@ -46,11 +47,20 @@ def reset_prototype(model, data_loader):
     labelnum = len(np.unique(targets))
     mu_list = []
     for i in range(labelnum):
-        features_l = features[targets==[i]]
+        features_l = features[targets == i]
+        if not len(features_l):
+            raise ValueError('No training samples found for reindexed class {}'.format(i))
         mu = np.mean(features_l, axis=0, keepdims=True)
         mu_list.append(mu)
     mu_list = np.vstack(mu_list)
-    new_prototypes = torch.from_numpy(mu_list).cuda().float()
-    new_prototypes = nn.Parameter(new_prototypes, requires_grad=True)
-    return new_prototypes
+    new_prototypes = torch.from_numpy(mu_list).to(model.prototypes.device).float()
+    if new_prototypes.shape != model.prototypes.shape:
+        raise ValueError(
+            'Prototype shape mismatch: expected {}, got {}'.format(
+                tuple(model.prototypes.shape), tuple(new_prototypes.shape)
+            )
+        )
+    with torch.no_grad():
+        model.prototypes.copy_(new_prototypes)
+    return model.prototypes
 

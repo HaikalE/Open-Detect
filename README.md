@@ -15,6 +15,7 @@ The identification of encrypted network traffic presents a pivotal challenge in 
 ## Table of Contents
 
 - [Features](#features)
+- [Paper-aligned implementation](#paper-aligned-implementation)
 - [Dataset](#dataset)
 - [Quickstart](#quickstart)
 - [Usage](#usage)
@@ -29,6 +30,20 @@ The identification of encrypted network traffic presents a pivotal challenge in 
 
 - **Unknown Attack Detection:** Detects both known and unknown attacks using latent Gaussian prototypes.
 - **Ready-to-Run Scripts:** Includes training and evaluation scripts.
+
+---
+
+## Paper-aligned implementation
+
+The training and evaluation flow follows the paper in the following places:
+
+- Preprocessing keeps the first 8 packets per flow, with 80 header bytes and 48 payload bytes per packet, producing one 32x32 grayscale image.
+- The generative constraint is reconstruction loss plus KL divergence to the correct class prototype (Equations 13 and 15).
+- The discriminative constraint uses the KL divergence to every known-class prototype (Equations 17 and 18).
+- The total loss is `lambda * generative + (1 - lambda) * discriminative`; there is no additional entropy term (Equation 20).
+- Each repeated experiment uses a stratified 80% training, 10% validation, and 10% test split.
+- The unknown-detection threshold is selected using only known validation samples so at least 95% are accepted as known (Equations 21 and 22). Unknown test samples are not used to tune it.
+- `run_5fold.py` runs five seeded repetitions and reports the mean and sample standard deviation.
 
 ---
 
@@ -58,7 +73,7 @@ Each scenario contains labeled traffic data for both benign and attack samples. 
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/niebikong/Open-Detect.git
+git clone https://github.com/HaikalE/Open-Detect.git
 cd Open-Detect
 ```
 
@@ -78,17 +93,28 @@ See [Setup & Installation](#setup--installation) for details.
 
 To train the Open-Detect model on your dataset:
 
-```python
-python train.py
+```bash
+python train.py --dset mal --split 0 --fold 0
 ```
 
 ### Testing / Evaluation
 
 To evaluate the model (including detection of unknown attacks):
 
-```python
-python test.py
+```bash
+python test.py --dset mal --split 0 --fold 0
 ```
+
+### Five-run evaluation
+
+To train and evaluate five seeded 80:10:10 splits and save per-run plus summary JSON files:
+
+```bash
+python run_5fold.py --dset mal --split 0
+```
+
+Use `--gpu -1` for CPU. Use `python train.py --help`, `python test.py --help`, or
+`python run_5fold.py --help` to see all options.
 
 ---
 
@@ -100,11 +126,15 @@ Open-Detect/
 ├── data/
 │   └── dataset/            # Downloaded network traffic data
 │   └── Preprocessing/      # Transform raw pcap file to grayscale images
-├── save_model/             # Trained mdoel
-├── model/                  # The Open-Detect model(Resnet18)
+├── save_model/             # Trained checkpoints
+├── results/                # Per-run and mean +/- standard deviation metrics
+├── model.py                # Open-Detect model and paper-aligned loss
 ├── train.py                # Training script
-├── test.py                 # Evaluation script
+├── test.py                 # Validation-threshold and test evaluation
+├── run_5fold.py            # Five seeded repetitions
+├── tests/                  # Paper-alignment regression tests
 ├── utils.py                # Utilities
+├── requirements.txt        # Python dependencies
 ├── README.md               # Project documentation
 ```
 
@@ -119,8 +149,8 @@ Open-Detect/
 
 Install dependencies (use a virtual environment for best results):
 
-```python
-pip install torch==2.1.1 numpy==1.26.1 pandas==2.1.3
+```bash
+pip install -r requirements.txt
 ```
 
 ---
@@ -131,8 +161,8 @@ The core model is a **Gaussian Prototype-Aided Variational Autoencoder (Open-Det
 Key characteristics:
 
 - **Encoder/Decoder:** Learns compact representations of network traffic.
-- **Gaussian Prototypes:** Each class (including unknown) is represented by a latent Gaussian, aiding unknown traffic recognition.
-- **Novelty Detection:** Samples far from known prototypes are flagged as unknown.
+- **Gaussian Prototypes:** Each known class is represented by one latent Gaussian prototype. Unknown classes are intentionally not assigned prototypes during training.
+- **Novelty Detection:** A sample is flagged as unknown when its minimum KL distance to all known prototypes is greater than or equal to the validation threshold.
 
 For more technical details, see the code in `model.py`.
 
@@ -140,8 +170,10 @@ For more technical details, see the code in `model.py`.
 
 ## Results & Scenarios
 
-The framework is evaluated across 8 scenarios, including multiple attack types.  
-Performance metrics, confusion matrices, and ROC curves can be generated using the test script.
+The framework is evaluated across 8 scenarios, including multiple attack types.
+The test script reports closed-world classification metrics and open-world AUROC,
+accuracy, precision, recall, and F1. The five-run script reports mean +/- standard
+deviation for every metric.
 
 ---
 
