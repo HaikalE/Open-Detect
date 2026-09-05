@@ -117,6 +117,12 @@ are documented above. The GitHub Actions workflow separately runs Python 3.10
 with the repository's pinned requirements and CPU Torch wheels; consult its
 actual run status before treating that environment as verified.
 
+Pinned-environment confirmation: all 21 tests also passed on Windows CPU with
+Python 3.10.6, Torch 2.1.1, torchvision 0.16.1, NumPy 1.26.1, sklearn 1.3.2
+and Scapy 2.5.0 (18.262 seconds). The same suite passed on Linux CPU in
+[GitHub Actions run 33976205419](https://github.com/HaikalE/Open-Detect/actions/runs/33976205419)
+at code commit `bb63deb3fb3ec03fe0874431b5dd0812573423ca` (13.565 seconds).
+
 No full 100-epoch dataset experiment, multi-seed accuracy replication or v2
 notebook epoch-resume test has been completed by this patch.
 
