@@ -5,7 +5,7 @@ from networks import net
 
 
 class OpenDetectNet(nn.Module):
-    def __init__(self, arch='resnet18', channel=3, latent_dim=128, n_classes=10, temp_inter=1.0, temp_intra=1, init=True):
+    def __init__(self, arch='resnet18', channel=3, latent_dim=128, n_classes=10, temp_inter=1.0, temp_intra=1, init=True, decoder_version=2):
         super(OpenDetectNet, self).__init__()
         self.arch = arch
         self.channel = channel
@@ -13,7 +13,8 @@ class OpenDetectNet(nn.Module):
         self.n_classes = n_classes
         self.temp_inter = temp_inter
         self.temp_intra = temp_intra
-        self.encoder, self.decoder = net(self.arch, self.channel, self.latent_dim)
+        self.decoder_version = decoder_version
+        self.encoder, self.decoder = net(self.arch, self.channel, self.latent_dim, decoder_version=decoder_version)
         # Keep parameters device agnostic. The caller moves the complete model
         # to CUDA or CPU with model.to(device).
         self.prototypes = nn.Parameter(torch.randn(self.n_classes, self.latent_dim), requires_grad=True)
@@ -91,6 +92,8 @@ def train_model(model, args, train_loader, epoch, optimizer):
         optimizer.zero_grad()
         _, _, preds, loss = model.loss(image, label)
         total_loss = args.lamda * (loss['rec'] + loss['kld']) + (1 - args.lamda) * loss['dis']
+        if not torch.isfinite(total_loss):
+            raise FloatingPointError('Non-finite training loss at epoch {}, batch {}'.format(epoch + 1, i))
         loss['total'] = total_loss
         total_loss.backward()
         optimizer.step()

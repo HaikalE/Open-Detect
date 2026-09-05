@@ -23,15 +23,18 @@ def read_pcap_list(pcap_filename, if_augment=False, remove_ip=True, keep_payload
     packets = scapy.rdpcap(pcap_filename)
     data = []
     flow_hex_length = IMAGE_BYTES * 2
-    end = len(packets) if if_augment else PACKETS_PER_FLOW
-    for packet in packets[:end]:
+    for packet in packets:
         try:
             header, payload = raw_packet_to_string(packet, remove_ip=remove_ip, keep_payload=keep_payload)
-        except Exception:
-            # Non-IP or malformed packets still occupy one zero-padded slot.
-            header = '0' * header_hex_length
-            payload = '0' * payload_hex_length
+        except ValueError:
+            # Excluded packets do not consume one of the first eight IP slots.
+            continue
         data.append(header + payload)
+        if not if_augment and len(data) == PACKETS_PER_FLOW:
+            break
+
+    if not data:
+        return []
 
     if not if_augment or len(data) <= PACKETS_PER_FLOW:
         flow_string = ''.join(data)
@@ -52,22 +55,43 @@ def read_pcap_list(pcap_filename, if_augment=False, remove_ip=True, keep_payload
 
 
 def raw_packet_to_string(packet, remove_ip=True, keep_payload=True):
-    """Keep 80 header bytes and 48 payload bytes from one packet."""
+    """Keep network/transport headers and application bytes as separate regions.
+
+    Read the transport payload structurally, including decoded application layers;
+    a Scapy Raw layer is not required. Never modify the caller's captured packet.
+    """
     header_hex_length = HEADER_BYTES_PER_PACKET * 2
     payload_hex_length = PAYLOAD_BYTES_PER_PACKET * 2
-    ip = packet["IP"]
-    if remove_ip:
-        PAD_IP_ADDR = "0.0.0.0"
-        ip.src, ip.dst = PAD_IP_ADDR, PAD_IP_ADDR
-    header = (binascii.hexlify(bytes(ip))).decode()
-    if keep_payload:
-        try:
-            payload = (binascii.hexlify(bytes(packet['Raw']))).decode()
-            header = header.replace(payload, '')
-        except:
-            payload = ''
+    if scapy.IP in packet:
+        ip = packet[scapy.IP].copy()
+        if ip.frag or ip.flags.MF:
+            raise ValueError('Fragmented packets require reassembly before extraction')
+        pad_address = '0.0.0.0'
+    elif scapy.IPv6 in packet:
+        ip = packet[scapy.IPv6].copy()
+        if scapy.IPv6ExtHdrFragment in ip:
+            raise ValueError('Fragmented packets require reassembly before extraction')
+        pad_address = '::'
     else:
-        payload = ''
+        raise ValueError('Non-IP packet')
+    if scapy.TCP in ip:
+        transport = ip[scapy.TCP]
+    elif scapy.UDP in ip:
+        transport = ip[scapy.UDP]
+        if transport.sport in (67, 68, 546, 547) or transport.dport in (67, 68, 546, 547):
+            raise ValueError('DHCP excluded')
+    else:
+        raise ValueError('Expected a TCP or UDP flow')
+    # Remove only capture padding, not application data or transport options.
+    if scapy.Padding in ip:
+        ip[scapy.Padding].underlayer.remove_payload()
+    application_bytes = bytes(transport.payload)
+    if remove_ip:
+        ip.src, ip.dst = pad_address, pad_address
+    network_bytes = bytes(ip)
+    header_length = len(network_bytes) - len(application_bytes)
+    header = network_bytes[:header_length].hex()
+    payload = application_bytes.hex() if keep_payload else ''
     header = (
         header[:header_hex_length]
         if len(header) > header_hex_length

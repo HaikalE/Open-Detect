@@ -131,8 +131,11 @@ class ResNet18Enc(nn.Module):
 
 class ResNet18Dec(nn.Module):
 
-    def __init__(self, nc=3, z_dim=10, num_Blocks=[2,2,2,2]):
+    def __init__(self, nc=3, z_dim=10, num_Blocks=[2,2,2,2], decoder_version=2):
         super().__init__()
+        if decoder_version not in (1, 2):
+            raise ValueError('Unsupported decoder version')
+        self.decoder_version = decoder_version
         self.in_planes = 512
         self.drop_rate = 0.9
         self.linear = nn.Linear(z_dim, 512)
@@ -170,7 +173,8 @@ class ResNet18Dec(nn.Module):
         x1 = self.layer2(x2)                  # 64 * 32 * 32
         x1 = x1 + self.conv_l1(mid_x['x_l1']) # 64 * 32 * 32
         x = self.layer1(x1)                   # 64 * 32 * 32
-        x = torch.sigmoid(self.conv1(x1))
+        # Version 1 preserves historical checkpoints whose final block was bypassed.
+        x = torch.sigmoid(self.conv1(x if self.decoder_version == 2 else x1))
         x = x.view(x.size(0), self.nc, 32*scale, 32*scale)
         return x
 

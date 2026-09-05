@@ -19,6 +19,17 @@ from data.dataset import get_dataset_splits
 from data.splits import get_splits
 from model import OpenDetectNet
 from utils import setup_seed
+from provenance import dataset_manifest, code_identity, sha256, PROTOCOL
+import warnings
+
+
+def finite_scores(values):
+    # NumPy may otherwise cast a Python float64 threshold back to float32,
+    # losing the nextafter step and rejecting the boundary validation sample.
+    scores = np.asarray(values, dtype=np.float64).reshape(-1)
+    if not scores.size or not np.isfinite(scores).all():
+        raise ValueError('Scores must be non-empty and finite')
+    return scores
 
 
 def get_output(model, data_loader, device=None):
@@ -55,7 +66,7 @@ def threshold_from_known_validation(known_validation_scores, known_acceptance=0.
     returned value is the next representable float above the selected score.
     Unknown samples are deliberately not used when choosing the threshold.
     """
-    scores = np.asarray(known_validation_scores, dtype=np.float64).reshape(-1)
+    scores = finite_scores(known_validation_scores)
     if not len(scores):
         raise ValueError('known_validation_scores must not be empty')
     if not 0 < known_acceptance <= 1:
@@ -63,7 +74,10 @@ def threshold_from_known_validation(known_validation_scores, known_acceptance=0.
 
     rank = max(1, math.ceil(known_acceptance * len(scores)))
     selected_score = np.partition(scores, rank - 1)[rank - 1]
-    return float(np.nextafter(selected_score, np.inf))
+    threshold = float(np.nextafter(selected_score, np.inf))
+    if not np.isfinite(threshold):
+        raise ValueError('No finite threshold above the selected score')
+    return threshold
 
 
 def closed_world_metrics(labels, predictions):
@@ -83,6 +97,9 @@ def closed_world_metrics(labels, predictions):
 
 def open_world_metrics(known_scores, unknown_scores, threshold):
     """Evaluate known=0 versus unknown=1 using the fixed validation threshold."""
+    known_scores, unknown_scores = finite_scores(known_scores), finite_scores(unknown_scores)
+    if not np.isfinite(threshold):
+        raise ValueError('Threshold must be finite')
     y_true = np.concatenate([
         np.zeros(len(known_scores), dtype=np.int64),
         np.ones(len(unknown_scores), dtype=np.int64),
@@ -95,6 +112,12 @@ def open_world_metrics(known_scores, unknown_scores, threshold):
         'open_precision': float(precision_score(y_true, y_pred, zero_division=0)),
         'open_recall': float(recall_score(y_true, y_pred, zero_division=0)),
         'open_f1': float(f1_score(y_true, y_pred, zero_division=0)),
+        'binary_macro_f1': float(f1_score(y_true, y_pred, average='macro', zero_division=0)),
+        'binary_weighted_f1': float(f1_score(y_true, y_pred, average='weighted', zero_division=0)),
+        'unknown_true_positive': int(np.sum((y_true == 1) & (y_pred == 1))),
+        'known_false_positive': int(np.sum((y_true == 0) & (y_pred == 1))),
+        'unknown_false_negative': int(np.sum((y_true == 1) & (y_pred == 0))),
+        'known_true_negative': int(np.sum((y_true == 0) & (y_pred == 0))),
         'known_test_acceptance': float(np.mean(known_scores < threshold)),
         'unknown_test_rejection': float(np.mean(unknown_scores >= threshold)),
     }
@@ -106,22 +129,33 @@ def evaluate_openset(
     known_test_loader,
     unknown_test_loader,
     known_acceptance=0.95,
+    scores_out=None,
 ):
     device = next(model.parameters()).device
     _, validation_scores, _ = get_output(model, validation_loader, device)
     known_labels, known_scores, known_predictions = get_output(model, known_test_loader, device)
     _, unknown_scores, _ = get_output(model, unknown_test_loader, device)
+    validation_scores = finite_scores(validation_scores)
+    known_scores, unknown_scores = finite_scores(known_scores), finite_scores(unknown_scores)
 
     threshold = threshold_from_known_validation(validation_scores, known_acceptance)
     metrics = closed_world_metrics(known_labels, known_predictions)
     metrics.update(open_world_metrics(known_scores, unknown_scores, threshold))
     metrics.update({
+        'metric_schema': 'replication-v2; open_f1=binary_unknown_positive; closed_f1=weighted_known',
         'threshold': threshold,
         'validation_known_acceptance': float(np.mean(validation_scores < threshold)),
         'known_validation_samples': int(len(validation_scores)),
         'known_test_samples': int(len(known_scores)),
         'unknown_test_samples': int(len(unknown_scores)),
     })
+    # Retain scores for later diagnostics without retraining or tuning on test labels.
+    if scores_out:
+        os.makedirs(os.path.dirname(os.path.abspath(scores_out)), exist_ok=True)
+        np.savez_compressed(scores_out, validation_scores=validation_scores,
+                            known_scores=known_scores, unknown_scores=unknown_scores,
+                            known_labels=known_labels, known_predictions=known_predictions,
+                            threshold=np.float64(threshold))
     return metrics
 
 
@@ -153,6 +187,7 @@ def load_model(path, device):
         config['temp_inter'],
         config.get('temp_intra', 1.0),
         init=False,
+        decoder_version=config.get('decoder_version', 1),
     ).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     return model, checkpoint
@@ -168,9 +203,10 @@ def build_parser():
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--gpu', type=int, default=0, help='GPU index; use -1 for CPU')
-    parser.add_argument('--save_dir', default='./save_model')
+    parser.add_argument('--save_dir', default='./save_model_v2')
     parser.add_argument('--model_path', default=None)
     parser.add_argument('--metrics_out', default=None)
+    parser.add_argument('--scores_out', default=None, help='Optional NPZ of validation/test scores for diagnostics')
     return parser
 
 
@@ -212,6 +248,20 @@ def evaluate(args):
     model, checkpoint = load_model(path, device)
     if checkpoint and checkpoint.get('known_classes') != known_classes:
         raise ValueError('Checkpoint known classes do not match the selected scenario')
+    expected = {'dataset': args.dset, 'scenario_split': args.split,
+                'fold': args.fold, 'split_seed': split_seed}
+    for key, value in expected.items():
+        if checkpoint.get(key) != value:
+            raise ValueError('Checkpoint {} mismatch: expected {}, got {}'.format(key, value, checkpoint.get(key)))
+    if checkpoint.get('protocol', PROTOCOL) != PROTOCOL:
+        raise ValueError('Checkpoint split protocol differs from evaluation')
+    manifest = dataset_manifest(known_dataset)
+    if checkpoint.get('data_manifest'):
+        if checkpoint['data_manifest']['files'] != manifest['files']:
+            raise ValueError('Dataset fingerprint differs from training checkpoint')
+    else:
+        warnings.warn('Legacy checkpoint has no dataset fingerprint; identity is not verified')
+    unknown_manifest = manifest if unknown_dataset == known_dataset else dataset_manifest(unknown_dataset)
 
     metrics = evaluate_openset(
         model,
@@ -219,6 +269,7 @@ def evaluate(args):
         known_test_loader,
         unknown_test_loader,
         known_acceptance=args.known_acceptance,
+        scores_out=getattr(args, 'scores_out', None),
     )
     metrics.update({
         'dataset': args.dset,
@@ -226,6 +277,15 @@ def evaluate(args):
         'fold': args.fold,
         'split_seed': split_seed,
         'checkpoint': path,
+        'checkpoint_sha256': sha256(path),
+        'best_epoch': checkpoint.get('best_epoch'),
+        'training_config': checkpoint.get('training_config'),
+        'decoder_version': model.decoder_version,
+        'protocol': PROTOCOL,
+        'data_manifest': manifest,
+        'unknown_data_manifest': unknown_manifest,
+        'evaluation_code_identity': code_identity(),
+        'training_code_identity': checkpoint.get('code_identity'),
     })
 
     print(json.dumps(metrics, indent=2, sort_keys=True))

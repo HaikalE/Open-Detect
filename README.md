@@ -1,5 +1,10 @@
 # Detection of Unknown Attacks Through Encrypted Traffic: A Gaussian Prototype-Aided Variational Autoencoder Framework
-IEEE TIFS 2025 ([https://ieeexplore.ieee.org/document/11173980](https://ieeexplore.ieee.org/document/11173696))
+This branch contains audited replication fixes relative to `2554fba`.
+Read [REPLICATION_NOTES.md](REPLICATION_NOTES.md) before starting training or
+comparing old/new results. New training uses decoder v2; higher accuracy is not
+guaranteed, and dataset/protocol equivalence to the paper remains unresolved.
+
+IEEE TIFS 2025 ([doi:10.1109/TIFS.2025.3612141](https://doi.org/10.1109/TIFS.2025.3612141))
 
 ---
 
@@ -73,7 +78,7 @@ Each scenario contains labeled traffic data for both benign and attack samples. 
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/HaikalE/Open-Detect.git
+git clone --branch codex/replication-fixes https://github.com/HaikalE/Open-Detect.git
 cd Open-Detect
 ```
 
@@ -112,6 +117,12 @@ To train and evaluate five seeded 80:10:10 splits and save per-run plus summary 
 ```bash
 python run_5fold.py --dset mal --split 0
 ```
+
+These are five repeated holdouts, not classical five-fold cross-validation.
+Outputs default to `save_model_v2/` and `results_v2/`. Check dataset counts first
+with `python provenance.py --dset mal`. Existing checkpoint paths are never
+overwritten by a new training invocation. Existing pinned notebooks remain on
+their old version until their launchers and resume adapters are regenerated.
 
 Use `--gpu -1` for CPU. Use `python train.py --help`, `python test.py --help`, or
 `python run_5fold.py --help` to see all options.

@@ -9,6 +9,7 @@ from data.dataset import get_dataset_splits
 from data.splits import get_splits
 from model import OpenDetectNet, train_model, validate_model
 from utils import reset_prototype, setup_seed, weight_init
+from provenance import dataset_manifest, code_identity, PROTOCOL
 
 
 def build_parser():
@@ -28,7 +29,7 @@ def build_parser():
     parser.add_argument('--seed', type=int, default=2022)
     parser.add_argument('--fold', type=int, default=0, help='0-based repeated split index')
     parser.add_argument('--num_workers', type=int, default=4)
-    parser.add_argument('--save_dir', default='./save_model')
+    parser.add_argument('--save_dir', default='./save_model_v2')
     return parser
 
 
@@ -40,6 +41,9 @@ def checkpoint_path(args):
 
 
 def train(args):
+    output_path = checkpoint_path(args)
+    if os.path.exists(output_path):
+        raise FileExistsError('Checkpoint exists; use a separate output directory: ' + output_path)
     if args.gpu >= 0:
         os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
     device = torch.device('cuda' if args.gpu >= 0 and torch.cuda.is_available() else 'cpu')
@@ -49,6 +53,8 @@ def train(args):
     os.makedirs(args.save_dir, exist_ok=True)
 
     known_classes, _, known_dataset, _ = get_splits(args.dset, num_split=args.split)
+    manifest = dataset_manifest(known_dataset)
+    identity = code_identity()
     args.num_classes = len(known_classes)
     train_set, val_set, _ = get_dataset_splits(
         known_dataset,
@@ -94,7 +100,6 @@ def train(args):
     ))
 
     best = float('-inf')
-    output_path = checkpoint_path(args)
     for epoch in range(args.epoch):
         train_model(model, args, train_loader, epoch, optimizer)
         if epoch in [50, 80]:
@@ -113,6 +118,7 @@ def train(args):
                         'n_classes': args.num_classes,
                         'temp_inter': args.temp_inter,
                         'temp_intra': args.temp_intra,
+                        'decoder_version': model.decoder_version,
                     },
                     'known_classes': known_classes,
                     'dataset': args.dset,
@@ -120,6 +126,11 @@ def train(args):
                     'fold': args.fold,
                     'split_seed': split_seed,
                     'validation_accuracy': val_acc,
+                    'best_epoch': epoch + 1,
+                    'protocol': PROTOCOL,
+                    'data_manifest': manifest,
+                    'code_identity': identity,
+                    'training_config': vars(args).copy(),
                 },
                 output_path,
             )

@@ -20,7 +20,8 @@ def net(name, *args, **kwargs):
     """
     if name not in __factory:
         raise KeyError("Unknown Network Arch:", name)
+    decoder_version = kwargs.pop('decoder_version', 2)
     encoder = __factory[name][0](*args, **kwargs)
-    decoder = __factory[name][1](*args, **kwargs)
+    decoder = __factory[name][1](*args, decoder_version=decoder_version, **kwargs)
     return encoder, decoder
 

@@ -1,6 +1,7 @@
 import numpy as np
 import torch.nn as nn
 import torch
+import random
 
 
 def weight_init(m):
@@ -14,6 +15,7 @@ def weight_init(m):
         nn.init.constant_(m.bias, 0)
 
 def setup_seed(seed):
+    random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
