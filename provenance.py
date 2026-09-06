@@ -9,7 +9,7 @@ import warnings
 import numpy as np
 
 PROTOCOL = 'five_seeded_stratified_80_10_10_repetitions'
-IMPLEMENTATION_VERSION = 'replication-fixes-v2'
+IMPLEMENTATION_VERSION = 'replication-fixes-v3-grouped'
 FILES = {
     'USTC': ('USTC_1c_train.npz', 'USTC_1c_test.npz'),
     'mal': ('mal_32_1c_train.npz', 'mal_32_1c_test.npz'),
@@ -34,7 +34,8 @@ def code_identity():
     root = Path(__file__).resolve().parent
     names = ['model.py', 'train.py', 'test.py', 'utils.py', 'provenance.py',
              'data/dataset.py', 'data/splits.py', 'networks/resnet.py',
-             'networks/__init__.py', 'run_5fold.py', 'data/Preprocessing/utils.py']
+             'networks/__init__.py', 'run_5fold.py', 'data/Preprocessing/utils.py',
+             'data/grouped.py', 'resume_support.py', 'run_grouped.py']
     try:
         commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'],
                                          text=True, stderr=subprocess.DEVNULL).strip()

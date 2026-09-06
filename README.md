@@ -1,4 +1,9 @@
 # Detection of Unknown Attacks Through Encrypted Traffic: A Gaussian Prototype-Aided Variational Autoencoder Framework
+**Branch `codex/grouped-split-colab`: use [GROUPED_COLAB.md](GROUPED_COLAB.md)
+for the new exact-image grouped experiment and resumable Colab launchers.**
+The default legacy commands below still use row-wise splits; the grouped entrypoint
+is `run_grouped.py`. Do not mix their checkpoints or results.
+
 This branch contains audited replication fixes relative to `2554fba`.
 Read [REPLICATION_NOTES.md](REPLICATION_NOTES.md) before starting training or
 comparing old/new results. New training uses decoder v2; higher accuracy is not

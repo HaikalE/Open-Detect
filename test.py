@@ -21,6 +21,7 @@ from model import OpenDetectNet
 from utils import setup_seed
 from provenance import dataset_manifest, code_identity, sha256, PROTOCOL
 import warnings
+from data.grouped import get_grouped_splits, verify_checkpoint_split
 
 
 def finite_scores(values):
@@ -207,6 +208,7 @@ def build_parser():
     parser.add_argument('--model_path', default=None)
     parser.add_argument('--metrics_out', default=None)
     parser.add_argument('--scores_out', default=None, help='Optional NPZ of validation/test scores for diagnostics')
+    parser.add_argument('--split_manifest_dir', default=None)
     return parser
 
 
@@ -221,18 +223,15 @@ def evaluate(args):
         args.dset,
         num_split=args.split,
     )
-    _, validation_set, known_test_set = get_dataset_splits(
-        known_dataset,
-        select_classes=known_classes,
-        target_transform='reindex',
-        seed=split_seed,
-    )
-    _, _, unknown_test_set = get_dataset_splits(
-        unknown_dataset,
-        select_classes=unknown_classes,
-        target_transform='open',
-        seed=split_seed,
-    )
+    split_identity = None
+    if getattr(args, 'split_manifest_dir', None):
+        _, validation_set, known_test_set, unknown_test_set, split_identity = get_grouped_splits(
+            args.dset, args.split, split_seed, args.split_manifest_dir)
+    else:
+        _, validation_set, known_test_set = get_dataset_splits(
+            known_dataset, select_classes=known_classes, target_transform='reindex', seed=split_seed)
+        _, _, unknown_test_set = get_dataset_splits(
+            unknown_dataset, select_classes=unknown_classes, target_transform='open', seed=split_seed)
 
     loader_args = {
         'batch_size': args.batch_size,
@@ -253,7 +252,9 @@ def evaluate(args):
     for key, value in expected.items():
         if checkpoint.get(key) != value:
             raise ValueError('Checkpoint {} mismatch: expected {}, got {}'.format(key, value, checkpoint.get(key)))
-    if checkpoint.get('protocol', PROTOCOL) != PROTOCOL:
+    protocol = split_identity['protocol'] if split_identity else PROTOCOL
+    verify_checkpoint_split(checkpoint, split_identity)
+    if checkpoint.get('protocol', PROTOCOL) != protocol:
         raise ValueError('Checkpoint split protocol differs from evaluation')
     manifest = dataset_manifest(known_dataset)
     if checkpoint.get('data_manifest'):
@@ -281,7 +282,8 @@ def evaluate(args):
         'best_epoch': checkpoint.get('best_epoch'),
         'training_config': checkpoint.get('training_config'),
         'decoder_version': model.decoder_version,
-        'protocol': PROTOCOL,
+        'protocol': protocol,
+        'split_identity': split_identity,
         'data_manifest': manifest,
         'unknown_data_manifest': unknown_manifest,
         'evaluation_code_identity': code_identity(),
