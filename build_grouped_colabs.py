@@ -127,7 +127,8 @@ def build(commit, output):
     hashes = {n: hashlib.sha256(subprocess.check_output(['git', '-C', str(ROOT), 'show', f'{commit}:{n}'])).hexdigest() for n in names}
     output.mkdir(parents=True, exist_ok=True)
     for scenario in SCENARIOS:
-        intro = f'''# OpenDetect {scenario} — GROUPED, lima pengulangan
+        intro = f'''
+        # OpenDetect {scenario} — GROUPED, lima pengulangan
 
         **Eksperimen baru; bukan melanjutkan hasil split baris lama.** A-1/A-2/A-3 memakai USTC,
         B-1/B-2/B-3 memakai Malicious TLS; C-1/C-2 memakai gabungan keduanya.
