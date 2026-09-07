@@ -121,12 +121,37 @@ def inventory(api, extra_ids=()):
             'project_id': PROJECT_ID, 'files': list(records.values())}
 
 
+def candidate_kind(name):
+    """Filename evidence only: NEVER automatic proof or permission to clean up."""
+    incomplete = name.endswith('.writing')
+    base = name[:-8] if incomplete else name
+    if base in ('last.pt', 'last.backup.pt', 'best.pt'):
+        kind = 'checkpoint'
+    elif base in ('last.pt.json', 'last.backup.pt.json', 'progress.json',
+                  'SESSION_STATUS.json', 'GROUPED_CONFIG.json', 'launcher_config.json',
+                  'resume_adapter_manifest.json', 'summary.json', 'result.json'):
+        kind = 'metadata/result'
+    elif base in ('train.log', 'test.log', 'summary.log', 'environment.txt',
+                  'per_run.csv', 'summary.csv'):
+        kind = 'log/summary'
+    elif re.fullmatch(r'(USTC|mal|combined)_split_\d+_fold_\d+\.(pt|json|scores\.npz|completed\.json|train\.log|test\.log)', base):
+        kind = 'named_run_artifact'
+    else:
+        return None
+    return kind + (' (partial/uncommitted)' if incomplete else '')
+
+
 def root_candidates(api):
-    # A candidate name is NOT permission to delete/copy it; user selects exact IDs.
-    return list_files(api, "'root' in parents and 'me' in owners and trashed = false and (name = 'last.pt' or name = 'last.backup.pt')")
+    # Metadata-only listing; never downloads PT or treats names as deletion scope.
+    records = list_files(api, "'root' in parents and 'me' in owners and trashed = false")
+    candidates = [{**r, 'candidate_kind':candidate_kind(r['name'])} for r in records
+                  if candidate_kind(r['name']) and binary(r)]
+    return sorted(candidates, key=lambda r: (r.get('modifiedTime',''), r['id']), reverse=True)
 
 
 def share_inventory(api, manifest, stopped):
+    if not manifest.get('files'):
+        raise ValueError('Inventaris kosong. Pilih ID kandidat root dahulu; tidak ada yang dibagikan.')
     if stopped != STOP_PHRASE:
         raise RuntimeError('Pause/stop source training first, then confirm the exact phrase')
     b = account(api)['user']['emailAddress'].lower()
@@ -170,6 +195,8 @@ def validate_copy(source, backup, a, folder):
 def backup_A(api, manifest, stopped):
     if stopped != STOP_PHRASE:
         raise RuntimeError('Source training must be stopped before a stable backup')
+    if not manifest.get('files'):
+        raise ValueError('Manifest kosong; tidak membuat backup kosong.')
     a = require_A(api, sum(int(r['size']) for r in manifest['files']) + 1_000_000_000)
     if manifest['format'] != 'opendetect-recovery-v1' or manifest['owner_A'] != a or manifest['project_id'] != PROJECT_ID:
         raise ValueError('Wrong manifest/project')

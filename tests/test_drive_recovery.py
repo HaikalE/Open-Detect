@@ -93,7 +93,28 @@ class RecoveryTests(unittest.TestCase):
     def test_backup_refuses_active_producer(self):
         with self.assertRaises(RuntimeError): d.backup_A(self.api,{},'')
     def test_backup_refuses_wrong_account(self):
-        with self.assertRaises(RuntimeError): d.backup_A(self.api,{'files':[]},d.STOP_PHRASE)
+        with self.assertRaises(RuntimeError): d.backup_A(self.api,{'files':[{'size':'12'}]},d.STOP_PHRASE)
+    def test_empty_manifest_refused(self):
+        with self.assertRaises(ValueError): d.backup_A(self.api,{'files':[]},d.STOP_PHRASE)
+        with self.assertRaises(ValueError): d.share_inventory(self.api,{'files':[]},d.STOP_PHRASE)
+        self.assertEqual(self.api.events,[])
+    def test_root_names_include_companions_not_unrelated(self):
+        for name in ('last.pt','last.backup.pt.json','last.pt.json','progress.json',
+                     'mal_split_0_fold_1.train.log','combined_split_0_fold_0.scores.npz',
+                     'GROUPED_CONFIG.json','per_run.csv'):
+            self.assertIsNotNone(d.candidate_kind(name),name)
+        self.assertIn('partial',d.candidate_kind('last.pt.writing'))
+        for name in ('personal.json','budget.csv','photo.png','my_model.pt'):
+            self.assertIsNone(d.candidate_kind(name))
+    def test_root_retains_duplicate_names_by_id(self):
+        records=[{'id':str(i),'name':name,'mimeType':'application/octet-stream',
+                  'size':'12','md5Checksum':'abc','modifiedTime':str(i)}
+                 for i,name in enumerate(['last.pt','last.pt','progress.json','private.json'])]
+        with patch.object(d,'list_files',return_value=records) as listing:
+            result=d.root_candidates(self.api)
+        self.assertEqual({r['id'] for r in result},{'0','1','2'})
+        self.assertIn("'root' in parents",listing.call_args[0][1])
+        self.assertEqual(self.api.events,[])
     def test_generated_notebooks(self):
         import build_storage_notebooks as b
         with tempfile.TemporaryDirectory(prefix='opendetect_notebook_qa_') as tmp:

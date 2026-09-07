@@ -22,6 +22,12 @@ ini tidak menyediakan uploader lintas akun otomatis.
 
 Gunakan `OpenDetect_RECOVERY_B_TO_A.ipynb`, CPU cukup. Default hanya inventaris.
 
+Versi `root-metadata-v2` mengunduh `OpenDetect_B_root_candidates.json` otomatis:
+checkpoint, JSON pendamping, progress, log, hasil bernama run dan ringkasan.
+Nama saja bukan bukti keterkaitan eksperimen; ID tetap harus dipilih.
+File `.writing` ditandai parsial, bukan otomatis valid untuk resume.
+Laporan kandidat bukan manifest backup; manifest kosong kini ditolak.
+
 1. Login B, `PHASE='INVENTORY_B'`, jalankan. Tinjau daftar scoped outputs.
    Kandidat `last.pt` di root belum dipilih: masukkan hanya ID file eksperimen
    yang benar ke `EXTRA_ORPHAN_IDS`. Jangan memilih seluruh root berdasarkan nama.

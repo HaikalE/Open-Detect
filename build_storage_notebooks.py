@@ -79,11 +79,14 @@ File salinan notebook di akun B tidak ikut berubah saat file origin ini diperbar
         # OpenDetect — Pemulihan B → A dan pembersihan B
 
         **Satu notebook, dipakai dalam tiga tahap. CPU cukup; tidak training.**
+        **Versi root-metadata-v2:** checkpoint, JSON pendamping, log, dan hasil root
+        masuk laporan kandidat. Nama yang sama tetap disimpan sebagai ID terpisah.
         A = pemilik folder THESIS IMPLEMENTASI origin. B = pemilik checkpoint yang
         membuat kuota penuh. Folder bersama tidak memindahkan kepemilikan file.
 
         1. **INVENTORY_B**: login B, tampilkan file B dalam outputs eksperimen dan
-           kandidat checkpoint root. Pilih ID orphan yang benar; bukan otomatis semua last.pt.
+           kandidat checkpoint + metadata/log root. Laporan kandidat JSON otomatis diunduh.
+           Pilih ID orphan yang benar; bukan otomatis semua last.pt.
            Setelah producer berhenti, bagikan file terpilih ke A dan unduh manifest JSON.
         2. **BACKUP_A**: buka notebook yang sama dengan otorisasi A, upload manifest.
            Copy server-side ke folder RECOVERY_B di THESIS IMPLEMENTASI A. Pemilik,
@@ -103,6 +106,9 @@ File salinan notebook di akun B tidak ikut berubah saat file origin ini diperbar
         Tidak membuka pickle checkpoint, tidak menghapus folder, tidak mengosongkan seluruh Sampah.
         Jika ganti akun, gunakan runtime notebook pemulihan baru/terputus (bukan runtime training).
         Pastikan baris **Drive API account** sesuai tahap; kesalahan akun ditolak.
+        Laporan kandidat bukan manifest backup. Jika file terpilih masih 0, jangan
+        lanjut BACKUP_A: isi EXTRA_ORPHAN_IDS dari laporan, termasuk JSON pendamping.
+        File .writing ditandai parsial; jangan dianggap checkpoint valid untuk resume.
         '''),
         ('code', "PHASE = 'INVENTORY_B' # INVENTORY_B / BACKUP_A / CLEANUP_B\nEXTRA_ORPHAN_IDS = [] # ID persis dari tabel kandidat root yang memang milik eksperimen ini\nSTOPPED = '' # Setelah producer berhenti: SEMUA RUN SUMBER SUDAH BERHENTI\nSHARE_AND_EXPORT = False # True setelah meninjau inventaris; memberi A akses baca hanya file terpilih\nCLEANUP_ACTION = 'PREVIEW' # PREVIEW / TRASH / DELETE_PERMANENT\nSELECTED_IDS = [] # ID sumber persis dari receipt, bukan ID backup\nCONFIRMATION = '' # Diisi hanya saat cleanup; lihat petunjuk output"),
         ('markdown', '## 1. Autentikasi dan periksa identitas\n\nPilih B untuk inventaris/pembersihan, A untuk backup. Jangan membagikan token atau password.'),
@@ -122,14 +128,23 @@ File salinan notebook di akun B tidak ikut berubah saat file origin ini diperbar
             path.write_text(json.dumps(value, indent=2), encoding='utf-8')
             files.download(str(path))
         if PHASE == 'INVENTORY_B':
-            print('KANDIDAT ROOT — belum dipilih, nama sama bukan bukti milik OpenDetect:')
-            for r in root_candidates(API):
-                print(r['id'], r['name'], r.get('size'), r.get('modifiedTime'))
             manifest = inventory(API, EXTRA_ORPHAN_IDS)
-            print('FILES DALAM SCOPE:', len(manifest['files']))
+            candidates = root_candidates(API)
+            print('KANDIDAT ROOT — belum otomatis dipilih, termasuk JSON dan log:')
+            for r in candidates:
+                print(r['id'], r['name'], r['candidate_kind'], r.get('size'), r.get('modifiedTime'))
+            print('JUMLAH KANDIDAT ROOT:', len(candidates))
+            print('TOTAL BYTE KANDIDAT:', sum(int(r['size']) for r in candidates))
+            export_json('OpenDetect_B_root_candidates.json', {
+                'format':'opendetect-root-candidates-v2', 'owner_B':manifest['owner_B'],
+                'notice':'CANDIDATES ONLY, not a backup receipt or deletion authorization',
+                'files':candidates})
+            print('FILE TERPILIH UNTUK BACKUP:', len(manifest['files']))
             for r in manifest['files']:
                 print(r['id'], '/'.join(r['relative_parts']), r['size'])
             print('Total bytes:', sum(int(r['size']) for r in manifest['files']))
+            if not manifest['files']:
+                print('Belum dipilih. Kirim laporan kandidat untuk diperiksa atau isi EXTRA_ORPHAN_IDS dengan ID yang benar. Jangan pindahkan file manual.')
             if SHARE_AND_EXPORT:
                 manifest = share_inventory(API, manifest, STOPPED)
                 export_json('OpenDetect_B_inventory.json', manifest)
