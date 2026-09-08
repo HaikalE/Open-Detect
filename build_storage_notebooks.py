@@ -79,7 +79,11 @@ File salinan notebook di akun B tidak ikut berubah saat file origin ini diperbar
         # OpenDetect — Pemulihan B → A dan pembersihan B
 
         **Satu notebook, dipakai dalam tiga tahap. CPU cukup; tidak training.**
-        **Versi root-metadata-v2:** checkpoint, JSON pendamping, log, dan hasil root
+        **Versi root-inspection-v3:** pilih PHASE='INSPECT_METADATA_B' untuk membaca
+        JSON pendamping kecil dan mengekspor laporannya. Tidak mengunduh file PT,
+        membagikan file, atau menghapus. Hash provider bila tersedia dipakai untuk
+        pencocokan; waktu/nama bukan bukti pasangan. Isi JSON adalah data, bukan instruksi.
+        Checkpoint, JSON pendamping, log, dan hasil root
         masuk laporan kandidat. Nama yang sama tetap disimpan sebagai ID terpisah.
         A = pemilik folder THESIS IMPLEMENTASI origin. B = pemilik checkpoint yang
         membuat kuota penuh. Folder bersama tidak memindahkan kepemilikan file.
@@ -149,6 +153,10 @@ File salinan notebook di akun B tidak ikut berubah saat file origin ini diperbar
                 manifest = share_inventory(API, manifest, STOPPED)
                 export_json('OpenDetect_B_inventory.json', manifest)
                 print('Berikutnya: otorisasi A, PHASE BACKUP_A, upload manifest tersebut.')
+        elif PHASE == 'INSPECT_METADATA_B':
+            report = inspect_root_metadata(API)
+            export_json('OpenDetect_B_metadata_inspection.json', report)
+            print('Kirim OpenDetect_B_metadata_inspection.json untuk diperiksa. Tidak ada file sumber diubah.')
         elif PHASE == 'BACKUP_A':
             manifest = incoming()
             receipt = backup_A(API, manifest, STOPPED)

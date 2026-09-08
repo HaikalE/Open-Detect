@@ -8,7 +8,7 @@ import uuid
 
 PROJECT_ID = '1Sry3j9KonUEQ88besc12_zxkyI0DoXfI'
 OUTPUTS_ID = '1o8-O578YTfc9FAwGKBZvDGJlzUYE7awI'
-FIELDS = 'id,name,mimeType,size,md5Checksum,version,modifiedTime,parents,trashed,owners(emailAddress),appProperties'
+FIELDS = 'id,name,mimeType,size,md5Checksum,sha256Checksum,version,modifiedTime,parents,trashed,owners(emailAddress),appProperties'
 STOP_PHRASE = 'SEMUA RUN SUMBER SUDAH BERHENTI'
 
 
@@ -147,6 +147,52 @@ def root_candidates(api):
     candidates = [{**r, 'candidate_kind':candidate_kind(r['name'])} for r in records
                   if candidate_kind(r['name']) and binary(r)]
     return sorted(candidates, key=lambda r: (r.get('modifiedTime',''), r['id']), reverse=True)
+
+
+def inspect_root_metadata(api):
+    """Read only small companion JSON; no pickle, checkpoint payload, or writes."""
+    b = account(api)['user']['emailAddress'].lower()
+    if b == owner(meta(api, PROJECT_ID)):
+        raise ValueError('INSPECT_METADATA_B requires account B')
+    candidates = root_candidates(api)
+    companions = [r for r in candidates if r['name'] in
+                  ('last.pt.json','last.backup.pt.json','progress.json')]
+    if len(companions) > 500 or sum(int(r['size']) for r in companions) > 8_000_000:
+        raise ValueError('Metadata inspection budget exceeded; narrow scope first')
+    report = {'format':'opendetect-root-inspection-v3', 'owner_B':b,
+              'notice':'Read-only evidence; not backup proof or deletion permission',
+              'candidates':candidates, 'metadata':[]}
+    checkpoints = [r for r in candidates if r['name'] in ('last.pt','last.backup.pt')]
+    for r in companions:
+        entry = {'id':r['id'], 'name':r['name']}
+        try:
+            before = meta(api,r['id'])
+            same_content(before,r)
+            if owner(before) != b or not binary(before) or int(before['size']) > 262144:
+                raise ValueError('Not a small B-owned JSON file')
+            payload = api.files().get_media(fileId=r['id']).execute()
+            if len(payload) != int(before['size']) or hashlib.md5(payload).hexdigest() != before['md5Checksum']:
+                raise ValueError('Downloaded metadata checksum/size mismatch')
+            same_content(meta(api,r['id']),before)
+            content = json.loads(payload)
+            if not isinstance(content,dict):
+                raise ValueError('Expected JSON object')
+            entry['content'] = content
+            expected = content.get('sha256',content.get('checkpoint_sha256',''))
+            if isinstance(expected,str) and re.fullmatch('[a-fA-F0-9]{64}',expected):
+                matches = [p['id'] for p in checkpoints
+                           if p.get('sha256Checksum','').lower() == expected.lower()]
+                entry['matching_checkpoint_ids'] = matches
+                entry['pair_status'] = ('provider_sha256_match' if matches else
+                    'no_provider_hash_match_not_proof_of_missing_checkpoint')
+            else:
+                entry['pair_status'] = 'no_valid_checkpoint_hash_in_json'
+            print(r['id'],r['name'],'epoch:',content.get('completed_epochs'),entry['pair_status'])
+        except Exception as error:
+            entry['error'] = type(error).__name__ + ': ' + str(error)
+            print('METADATA ERROR:',r['id'],entry['error'])
+        report['metadata'].append(entry)
+    return report
 
 
 def share_inventory(api, manifest, stopped):

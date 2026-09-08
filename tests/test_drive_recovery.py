@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import ast
 import json
 import tempfile
@@ -135,6 +136,32 @@ class RecoveryTests(unittest.TestCase):
                     config=''.join(nb['cells'][1]['source'])
                     self.assertIn("CLEANUP_ACTION = 'PREVIEW'",config)
                     self.assertIn('SHARE_AND_EXPORT = False',config)
+
+    def test_inspection_reads_json_only_and_matches_hash(self):
+        payload=json.dumps({'completed_epochs':49,'sha256':'a'*64}).encode()
+        r={'id':'json','name':'last.pt.json','size':str(len(payload)),
+           'md5Checksum':hashlib.md5(payload).hexdigest(),'version':'1',
+           'modifiedTime':'now','mimeType':'application/json',
+           'owners':[{'emailAddress':'b@example.com'}]}
+        self.api.records['json']=r
+        pt={'id':'pt','name':'last.pt','sha256Checksum':'a'*64}
+        with patch.object(d,'root_candidates',return_value=[r,pt]), \
+             patch.object(self.api,'get_media',create=True,return_value=Request(lambda:payload)) as media:
+            result=d.inspect_root_metadata(self.api)
+        media.assert_called_once_with(fileId='json')
+        self.assertEqual(result['metadata'][0]['matching_checkpoint_ids'],['pt'])
+        self.assertEqual(self.api.events,[])
+
+    def test_inspection_rejects_oversize_before_download(self):
+        r={'id':'json','name':'progress.json','size':'300000','md5Checksum':'abc',
+           'version':'1','modifiedTime':'now','mimeType':'application/json',
+           'owners':[{'emailAddress':'b@example.com'}]}
+        self.api.records['json']=r
+        with patch.object(d,'root_candidates',return_value=[r]), \
+             patch.object(self.api,'get_media',create=True) as media:
+            result=d.inspect_root_metadata(self.api)
+        media.assert_not_called()
+        self.assertIn('error',result['metadata'][0])
 
 
 if __name__ == '__main__': unittest.main()
