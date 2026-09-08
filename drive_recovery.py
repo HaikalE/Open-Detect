@@ -134,7 +134,7 @@ def candidate_kind(name):
     elif base in ('train.log', 'test.log', 'summary.log', 'environment.txt',
                   'per_run.csv', 'summary.csv'):
         kind = 'log/summary'
-    elif re.fullmatch(r'(USTC|mal|combined)_split_\d+_fold_\d+\.(pt|json|scores\.npz|completed\.json|train\.log|test\.log)', base):
+    elif re.fullmatch(r'(USTC|mal|combined|combined_USTC_mal)_split_\d+_fold_\d+\.(pt|json|scores\.npz|completed\.json|train\.log|test\.log)', base):
         kind = 'named_run_artifact'
     else:
         return None

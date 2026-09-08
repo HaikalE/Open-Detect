@@ -68,3 +68,50 @@ berarti backup atau pembersihan B sudah dieksekusi.
 Referensi: [kuota Drive](https://support.google.com/drive/answer/2424368?hl=en),
 [kepemilikan](https://support.google.com/drive/answer/2494892?hl=en),
 [trash dan delete API](https://developers.google.com/workspace/drive/api/guides/delete).
+# Update 2026-09-08 — cloud-workflow-v4 (menggantikan langkah manual di bawah)
+
+Notebook recovery yang sama sekarang dibangun dengan `build_cloud_recovery.py`.
+Tidak ada `files.upload`/`files.download`. Manifest dan receipt dibaca langsung
+dari Drive API. CPU cukup; tidak menjalankan training atau mengatasi limit GPU.
+
+1. **B / PREPARE_B**: preview outputs dan kandidat root, pilih ID sumber persis
+   di SOURCE_IDS, konfirmasi semua producer berhenti. Bagikan sumber ke A dan
+   simpan manifest/inspection ke folder handoff di THESIS IMPLEMENTASI.
+2. **A / BACKUP_A**: baca satu handoff (pilih JOB_FOLDER_ID bila ambigu), copy
+   server-side ke folder arsip A, periksa owner/ukuran/checksum, simpan receipt.
+3. **A / PLAN_A**: baca RECEIPT_ID. Skenario/fold/seed dikenali dari metadata
+   format 2, bukan nama file. SHA256 memasangkan PT dan metadata; konfigurasi
+   canonical (termasuk kode/data/split) harus cocok dengan experiment_signature.
+   Cetak tujuan dan link notebook training yang tepat.
+4. **A / INSTALL_A**: pilih satu skenario/fold hasil plan. Semua producer A/B
+   wajib berhenti. KEEP_A bila A sama/lebih baru; epoch sama dengan hash berbeda
+   ditolak. Copy bertahap, verifikasi, pertahankan file lama dengan nama BEFORE_,
+   publish PT kemudian JSON. Slot valid paling baru yang lain tidak disentuh.
+5. **B / PREVIEW_B → TRASH_B**: periksa receipt/backup, tinjau daftar, salin token
+   daftar dan ketik konfirmasi. Hanya sumber receipt, tidak menghapus backup A.
+6. **B / DELETE_B**: tahap terpisah setelah resume training nyata berhasil di A,
+   disertai pengakuan pengguna dan konfirmasi permanen. Backup diverifikasi lagi.
+   Sumber wajib sudah di Sampah. File 404 dilaporkan sebagai tidak tersedia,
+   bukan diklaim sudah dihapus; file lain tetap diverifikasi satu per satu.
+
+Untuk kasus C-1 yang sudah diarsipkan: RECEIPT_ID lama sudah terisi. Mulai PLAN_A;
+tidak perlu menyiapkan B lagi. Untuk pekerjaan baru kosongkan ID lama. Pemilihan
+otomatis hanya ketika hasil discovery tepat satu; jika lebih dari satu, salin ID
+yang tepat, tetap tanpa upload JSON. Konfirmasi akun tidak diotomatisasi.
+
+**Batas:** config/folder canonical yang belum ada tidak dibuat dari tebakan.
+Completed marker tidak ditimpa. Log/hasil/data tetap di arsip, bukan otomatis
+dianggap output canonical. Metadata tidak berpasangan dilaporkan. Alat tidak
+memuat pickle/model/RNG; trainer harus membuktikan resume nyata. Sampah masih
+memakai kuota. Tidak ada transaksi lintas file: gunakan satu sesi recovery dan
+jangan menulis bersamaan. STAGED_/BEFORE_ dipertahankan, tidak dibersihkan otomatis.
+Identitas API menentukan pemilik file baru; berbagi folder sebagai Editor bukan
+pemindahan kepemilikan. Pengaman training A-only yang ada tidak diubah.
+
+Uji menggunakan API tiruan mencakup pemasangan normal, putus saat publish,
+pencegahan rollback, riwayat berbeda, identitas salah, dan pengaman cleanup.
+Penerbitan notebook bukan bukti operasi A/B atau resume GPU sudah dijalankan.
+
+---
+
+## Dokumentasi versi lama (arsip; bukan langkah notebook v4)
