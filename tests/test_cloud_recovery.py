@@ -79,6 +79,19 @@ class CloudTests(unittest.TestCase):
     def test_equal_identical_kept(self):
         self.assertEqual(self.plan(50,'a'*64)['runs'][0]['decision'],'KEEP_A')
 
+    def test_epoch_100_routes_to_evaluation(self):
+        r=self.plan(100)['runs'][0]
+        self.assertIsNone(r['next_epoch'])
+        self.assertEqual(r['next_step'],'evaluation_then_next_fold')
+
+    def test_divergent_backup_latest_epoch_stops(self):
+        folders,docs,records,receipt=self.setup_plan()
+        docs['otherjson']=copy.deepcopy(docs['backupjson']);docs['otherjson']['sha256']='c'*64
+        records['otherpt']=dict(id='otherpt',owners=[{'emailAddress':'a'}],sha256Checksum='c'*64)
+        receipt['files'] += [dict(name='last.pt',backup_id='otherpt'),dict(name='last.pt.json',backup_id='otherjson')]
+        with patch.object(w,'require_A',return_value='a'),patch.object(w,'unique_names',side_effect=lambda a,i:folders[i]),patch.object(w,'read_json',side_effect=lambda a,i,*x:docs[i]),patch.object(w,'meta',side_effect=lambda a,i:records[i]):
+            self.assertEqual(w.recovery_plan(None,receipt)['runs'][0]['decision'],'STOP')
+
     def test_completed_never_installed(self):
         self.assertEqual(self.plan(completed=True)['runs'][0]['decision'],'STOP')
 

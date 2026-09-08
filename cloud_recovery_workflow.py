@@ -189,6 +189,8 @@ def recovery_plan(api, receipt):
         candidate=max(candidates,key=lambda p:p['epoch'])
         row={**candidate,'decision':'STOP','reason':'Unverified canonical config'}
         try:
+            if len({p['record']['sha256'] for p in candidates if p['epoch']==candidate['epoch']})>1:
+                raise ValueError('Backup histories diverge at same latest epoch; do not choose by time/name')
             scenario,fold=key
             output=out[scenario]
             if owner(output)!=a: raise ValueError('Canonical output not A-owned')
@@ -223,7 +225,8 @@ def recovery_plan(api, receipt):
             preserve=max(valid)[1] if valid else None
             slot='last.backup.pt' if preserve=='last.pt' else 'last.pt'
             row.update(decision=decision,reason='',canonical_epoch=latest,target_folder=target['id'],
-                slot=slot,next_epoch=max(latest,candidate['epoch'])+1,
+                slot=slot,next_epoch=max(latest,candidate['epoch'])+1 if max(latest,candidate['epoch'])<100 else None,
+                next_step='resume_training' if max(latest,candidate['epoch'])<100 else 'evaluation_then_next_fold',
                 training_url='https://colab.research.google.com/drive/'+TRAINING_IDS[scenario],
                 destination='outputs/'+scenario+'/resume_state/'+base,
                 config_id=names['GROUPED_CONFIG.json']['id'])
@@ -237,7 +240,9 @@ def print_plan(plan):
     for r in plan['runs']:
         print(r['scenario'],'fold',r['fold'],'backup epoch',r['epoch'],
               'A epoch',r.get('canonical_epoch'),r['decision'],r['reason'])
-        if r.get('destination'): print('Tujuan:',r['destination'],'| Lanjut:',r['training_url'])
+        if r.get('destination'):
+            print('Tujuan:',r['destination'],'| Lanjut:',r['training_url'])
+            print('Berikutnya:',r['next_step'],'epoch:',r['next_epoch'])
     print('Metadata belum berpasangan:',len(plan['unmatched']))
     print('Ini verifikasi cloud, BUKAN bukti model/RNG berhasil dimuat oleh training.')
 
