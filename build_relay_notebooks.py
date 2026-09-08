@@ -10,13 +10,13 @@ COMMIT='c729403f7fd4d1207522e3ca793cafb5f8cb8eb0'
 
 def build(output):
     output=Path(output);old.build(COMMIT,output)
-    transport={n:(ROOT/n).read_text(encoding='utf-8') for n in ('relay_client.py','relay_entry.py','drive_reader.py')}
+    transport={n:(ROOT/n).read_text(encoding='utf-8') for n in ('relay_client.py','relay_entry.py','drive_reader.py','restore_plan.py')}
     for scenario in old.SCENARIOS:
         p=output/f'OpenDetect_{scenario}_GROUPED.ipynb';nb=json.loads(p.read_text())
-        nb['metadata']['storage_transport']='owner-relay-v2-hybrid-read'
+        nb['metadata']['storage_transport']='owner-relay-v3-selective-restore'
         intro=''.join(nb['cells'][0]['source'])
         intro=intro[:intro.index('**Cara menjalankan:**')]+f'''
-## Penyimpanan multi-worker — owner-relay-v2-hybrid-read
+## Penyimpanan multi-worker — owner-relay-v3-selective-restore
 
 **Aktivasi layanan A wajib; tanpa URL/key valid notebook BERHENTI sebelum training.**
 B-mn, B-mc, A, dan pekerja lain memakai notebook skenario masing-masing. Semua
@@ -49,6 +49,11 @@ Manifest snapshot menunjuk path logis `save_model/`, `results/`, `resume_state/`
 Notebook terbaru mengembalikan snapshot itu ke disk VM lokal lalu trainer
 memverifikasi konfigurasi dan melanjutkan epoch/fold. A melanjutkan pekerjaan B
 dengan membuka notebook yang sama dan key A yang diberi akses {scenario}.
+Pemulihan selektif: model terbaik, hasil, skor, dan marker fold selesai tetap
+diunduh dan diverifikasi. Folder resume_state fold itu dilewati HANYA setelah
+verifikasi sukses. Semua slot fold belum selesai tetap dipulihkan agar fallback
+bawaan trainer terjaga. File yang dilewati tetap tersimpan/dirujuk di cloud A;
+tidak dihapus saat sinkronisasi berikutnya. Penanda selesai saja tidak cukup.
 **Jangan memakai notebook mount lama atau recovery-v4 untuk memilih state relay terbaru.**
 File canonical lama dipertahankan sebagai bootstrap, tidak diperbarui oleh relay.
 

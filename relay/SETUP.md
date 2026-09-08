@@ -1,8 +1,25 @@
 # Owner-A relay — hybrid reads, activation required
 
+## Selective restore update (2026-09-08)
+
+`owner-relay-v3-selective-restore` keeps the same service, secrets, scientific
+commit and checkpoint formats. It first restores non-resume artifacts, verifies
+completed markers against configuration, best-model/result/score hashes and fold
+identity, then omits ONLY those completed folds' resume_state directories. The
+unchanged scientific runner verifies completed artifacts again before skipping.
+All available slots of unfinished folds still download to retain deserialization
+fallback. No latest-filename/mtime heuristic, no deletion, no automatic reset.
+Absent/mismatching completion evidence is never treated as permission to skip.
+
+The client preserves remote-only records in subsequent snapshot commits, including
+child-process commits. Skipped archive files do not need to be locally present.
+Partial transfer files are never uploaded as training artifacts. Existing remote
+objects and local files are not deleted. Local tests cover the real runner's
+completed-fold verifier; real GPU continuation still needs observation.
+
 ## Hybrid update (2026-09-08)
 
-Latest training notebooks use `owner-relay-v2-hybrid-read`. No Apps Script
+Hybrid training notebooks use direct authenticated reads. No Apps Script
 redeployment or new worker key is required for this client-only update.
 Owner A must share the dataset folder and the assigned scenario output folder
 (including `_relay`) with the worker as Viewer with download allowed. Sharing
@@ -20,8 +37,8 @@ Download: Drive A -> authenticated worker -> VM local disk, without the Apps
 Script/base64 data hop. Save: existing A-initiated scoped upload -> Drive A,
 then hash-verified snapshot commit. No output is written into worker My Drive.
 Progress reports file, MiB, percent and observed speed; it is not a guaranteed ETA.
-The full selected snapshot is retained for consistency (no speculative pruning
-of completed folds/backup slots). Live speed and GPU resume still need testing.
+Completed-fold resume pruning now follows the verified rules above. Live speed
+and GPU resume still need testing.
 
 Ordinary My Drive shared folders are NOT organizational Shared drives. A mount
 could be used for reads, but writes through a B mount are not a guarantee of A

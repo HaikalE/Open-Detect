@@ -105,8 +105,21 @@ class Relay:
             present={p.relative_to(output).as_posix() for p in output.rglob('*') if p.is_file()
                      and '.relay-part' not in p.name}
             if present-expected: raise ValueError('Local output contains uncommitted files; preserved, use a fresh work directory')
-        print('RESTORE:',len(self.files),'files',f'{sum(r["size"] for r in self.files)/1048576:.1f} MiB',flush=True)
-        for r in self.files: self.download(r,safe_path(output,r['path']))
+        if len(expected)!=len(self.files):raise ValueError('Duplicate manifest paths')
+        print('SNAPSHOT:',len(self.files),'files',f'{sum(r["size"] for r in self.files)/1048576:.1f} MiB',flush=True)
+        # Stage validation inputs first. Keep pinned runner's local artifact checks.
+        ordinary=[r for r in self.files if not r['path'].startswith('resume_state/')]
+        for r in ordinary:self.download(r,safe_path(output,r['path']))
+        from restore_plan import verified_completed
+        completed=verified_completed(output,self.scenario)
+        omitted=[]
+        for r in self.files:
+            if not r['path'].startswith('resume_state/'):continue
+            if r['path'].split('/')[1] in completed:
+                omitted.append(r)
+            else:self.download(r,safe_path(output,r['path']))
+        print('SELECTIVE RESTORE: verified completed folds',sorted(completed),
+              '; skipped',len(omitted),'resume files',f'{sum(r["size"] for r in omitted)/1048576:.1f} MiB; retained in A',flush=True)
         print('A SNAPSHOT RESTORED:',self.scenario,'generation',self.generation,flush=True)
 
     def upload(self,path,relative):
@@ -143,23 +156,26 @@ class Relay:
         return {'path':relative,'id':result['id'],'size':size,'sha256':checksum}
 
     def sync(self, output):
-        output=Path(output);old={r['path']:r for r in self.files};records=[]
+        output=Path(output);old={r['path']:r for r in self.files};records=dict(old)
+        # Missing local paths are NOT cloud deletions: selective restore leaves
+        # archived completed-fold resume files only in the remote manifest.
         # Called synchronously AFTER completed epoch or evaluator exit. Never background-copy a live PT.
         for source in sorted(output.rglob('*')):
-            if not source.is_file() or source.name.endswith('.writing'): continue
+            if not source.is_file() or source.name.endswith(('.writing','.relay-part','.relay-part.json')): continue
             relative=source.relative_to(output).as_posix();safe_path(output,relative)
             checksum=digest(source)
             if relative in old and old[relative]['sha256']==checksum:
-                records.append(old[relative]);continue
+                continue
             # Logs may still be flushed by runner; copy once to immutable local staging.
             temporary=output.parent/('.relay-upload-'+uuid.uuid4().hex)
             try:
                 shutil.copyfile(source,temporary)
                 if digest(temporary)!=checksum: raise RuntimeError('Output changed during snapshot; stop rather than publish torn files')
-                records.append(self.upload(temporary,relative))
+                records[relative]=self.upload(temporary,relative)
             finally:
                 if temporary.exists(): temporary.unlink()
         if not records: raise ValueError('Refusing empty snapshot')
+        records=list(records.values())
         result=self.call('commit',generation=self.generation,files=records)
         self.generation=result['generation'];self.files=records
         print('CLOUD COMMITTED TO A:',self.scenario,'generation',self.generation,flush=True)
