@@ -31,13 +31,15 @@ def safe_path(root, relative):
 
 
 class Relay:
-    def __init__(self,url,key,scenario,session=None):
+    def __init__(self,url,key,scenario,session=None,reader=None):
+        url=url.strip()
         u=urllib.parse.urlparse(url)
         if u.scheme!='https' or u.hostname!='script.google.com' or not u.path.endswith('/exec') or u.query:
             raise ValueError('Set deployed Apps Script HTTPS /exec URL; no training started')
         if not key or len(key)<32: raise ValueError('Missing scoped worker key in Colab Secrets')
         self.url=url;self.key=key;self.scenario=scenario
         self.session=session or uuid.uuid4().hex;self.generation=0;self.files=[]
+        self.reader=reader
 
     def call(self, action, **kwargs):
         # No URL/token/body in error output. Mutations are NOT blindly retried.
@@ -70,18 +72,31 @@ class Relay:
             raise ValueError('Different partial download preserved')
         side.write_text(json.dumps(ident))
         offset=temporary.stat().st_size if temporary.exists() else 0
+        started=time.monotonic();initial=offset;last_report=started
+        print('DOWNLOAD:',dataset or record.get('path','file'),f'{offset/1048576:.1f}/{record["size"]/1048576:.1f} MiB',
+              'direct Drive' if self.reader else 'relay',flush=True)
         with temporary.open('ab') as out:
             while offset<record['size']:
-                args={'offset':offset}
-                args.update(dataset=dataset) if dataset else args.update(path=record['path'])
-                result=self.call('read',**args)
-                data=base64.b64decode(result['data'],validate=True)
+                if self.reader:
+                    data=self.reader.read(record,offset)
+                    result={'sha256':record['sha256'],'end':offset+len(data)}
+                else:
+                    args={'offset':offset}
+                    args.update(dataset=dataset) if dataset else args.update(path=record['path'])
+                    result=self.call('read',**args)
+                    data=base64.b64decode(result['data'],validate=True)
                 if result['sha256']!=record['sha256'] or result['end']!=offset+len(data) or not data:
                     raise ValueError('Download identity/range mismatch')
                 out.write(data);out.flush();offset+=len(data)
+                now=time.monotonic()
+                if now-last_report>=5 or offset==record['size']:
+                    speed=(offset-initial)/1048576/max(now-started,.001)
+                    print(f'  {offset/1048576:.1f}/{record["size"]/1048576:.1f} MiB ({100*offset/record["size"]:.1f}%) {speed:.2f} MiB/s',flush=True)
+                    last_report=now
         if temporary.stat().st_size!=record['size'] or digest(temporary)!=record['sha256']:
             raise ValueError('Downloaded hash mismatch; partial file preserved')
         os.replace(temporary,destination);side.unlink()
+        print('HASH VERIFIED:',dataset or record.get('path','file'),flush=True)
 
     def restore(self, output):
         output=Path(output)
@@ -90,6 +105,7 @@ class Relay:
             present={p.relative_to(output).as_posix() for p in output.rglob('*') if p.is_file()
                      and '.relay-part' not in p.name}
             if present-expected: raise ValueError('Local output contains uncommitted files; preserved, use a fresh work directory')
+        print('RESTORE:',len(self.files),'files',f'{sum(r["size"] for r in self.files)/1048576:.1f} MiB',flush=True)
         for r in self.files: self.download(r,safe_path(output,r['path']))
         print('A SNAPSHOT RESTORED:',self.scenario,'generation',self.generation,flush=True)
 

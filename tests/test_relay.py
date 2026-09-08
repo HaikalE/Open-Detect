@@ -59,7 +59,7 @@ class RelayTests(unittest.TestCase):
             for path in notebooks:
                 nb=json.loads(path.read_text(encoding='utf-8'));source='\n'.join(''.join(c['source']) for c in nb['cells'])
                 self.assertNotIn('drive.mount(',source)
-                self.assertNotIn('authenticate_user()',source)
+                self.assertIn('RELAY.reader = colab_reader()',source)
                 self.assertEqual(nb['metadata']['source_commit'],'c729403f7fd4d1207522e3ca793cafb5f8cb8eb0')
                 self.assertIn("userdata.get('OPENDETECT_WORKER_KEY')",source)
                 for c in nb['cells']:

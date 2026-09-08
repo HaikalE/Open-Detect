@@ -10,17 +10,22 @@ COMMIT='c729403f7fd4d1207522e3ca793cafb5f8cb8eb0'
 
 def build(output):
     output=Path(output);old.build(COMMIT,output)
-    transport={n:(ROOT/n).read_text(encoding='utf-8') for n in ('relay_client.py','relay_entry.py')}
+    transport={n:(ROOT/n).read_text(encoding='utf-8') for n in ('relay_client.py','relay_entry.py','drive_reader.py')}
     for scenario in old.SCENARIOS:
         p=output/f'OpenDetect_{scenario}_GROUPED.ipynb';nb=json.loads(p.read_text())
-        nb['metadata']['storage_transport']='owner-relay-v1-activation-required'
+        nb['metadata']['storage_transport']='owner-relay-v2-hybrid-read'
         intro=''.join(nb['cells'][0]['source'])
         intro=intro[:intro.index('**Cara menjalankan:**')]+f'''
-## Penyimpanan multi-worker — owner-relay-v1
+## Penyimpanan multi-worker — owner-relay-v2-hybrid-read
 
 **Aktivasi layanan A wajib; tanpa URL/key valid notebook BERHENTI sebelum training.**
 B-mn, B-mc, A, dan pekerja lain memakai notebook skenario masing-masing. Semua
 file cloud dibuat atas otorisasi A; tidak memakai drive.mount atau Drive pekerja.
+Download menggunakan izin baca akun pekerja langsung ke Drive A (bukan Apps Script).
+Saat diminta login baca Drive, pilih akun pekerja B, BUKAN kredensial A.
+A harus membagikan folder dataset dan outputs/{scenario} kepada B minimal Viewer
+dengan izin download. Key relay bukan pengganti izin baca Drive. Tidak ada perubahan
+sharing otomatis. File tersalin hanya ke disk VM /content, bukan kuota Drive B.
 Model, loss, data, seed, dan file kode ilmiah tetap pinned commit di atas.
 Transport tambahan membungkus batas epoch tanpa mengubah file repo tersebut.
 
@@ -28,7 +33,8 @@ Transport tambahan membungkus batas epoch tanpa mengubah file repo tersebut.
 2. Pada Colab Secrets (ikon kunci), isi `OPENDETECT_RELAY_URL` (URL /exec) dan
    `OPENDETECT_WORKER_KEY` dari A. Beri notebook akses. Jangan tulis key di sel,
    output, screenshot, chat atau GitHub. Key berbeda untuk tiap pekerja dan dapat dicabut.
-3. Jalankan GPU → Run all. Key harus ditugaskan ke **{scenario}**.
+3. Jalankan GPU → Run all. Key harus ditugaskan ke **{scenario}**. Autentikasi baca
+   dilakukan sekali saat setup, sebelum training; error izin berhenti dengan jelas.
 4. Skenario yang sama hanya satu lease aktif. Skenario berbeda boleh paralel;
    tetap tunduk kuota GPU masing-masing akun dan kuota layanan Google.
 
@@ -74,8 +80,11 @@ for name, source in TRANSPORT.items():
     (TRANSPORT_DIR/name).write_text(source,encoding='utf-8')
 sys.path.insert(0,str(TRANSPORT_DIR))
 from relay_client import Relay
+from drive_reader import colab_reader
 RELAY = Relay(RELAY_URL,WORKER_KEY,SCENARIO)
 print('RELAY READY:', RELAY.call('hello'))
+RELAY.reader = colab_reader()
+print('HYBRID READ READY: direct Drive reads; output writes remain owner A relay')
 PROJECT = Path('/content/opendetect_worker')
 PACKAGE = PROJECT / FOLDER
 PACKAGE.mkdir(parents=True,exist_ok=True)

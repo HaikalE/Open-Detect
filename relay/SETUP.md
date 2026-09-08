@@ -1,4 +1,43 @@
-# Owner-A relay — activation required
+# Owner-A relay — hybrid reads, activation required
+
+## Hybrid update (2026-09-08)
+
+Latest training notebooks use `owner-relay-v2-hybrid-read`. No Apps Script
+redeployment or new worker key is required for this client-only update.
+Owner A must share the dataset folder and the assigned scenario output folder
+(including `_relay`) with the worker as Viewer with download allowed. Sharing
+only the notebook, or giving a relay key, does not grant this Drive permission.
+The code does not change permissions automatically or make files public.
+
+During notebook setup authenticate as B for reading; do not give B A's Google
+password/token. The reader issues only GET requests for exact manifest IDs.
+Colab's authentication grant may be broader than read-only: this describes code
+behavior, not a promise that Colab OAuth is narrowly scoped. Use Viewer folder
+permissions and trusted notebooks. Secrets URL/key are still used for control
+and A-owned uploads. A can authenticate as A when it is the worker.
+
+Download: Drive A -> authenticated worker -> VM local disk, without the Apps
+Script/base64 data hop. Save: existing A-initiated scoped upload -> Drive A,
+then hash-verified snapshot commit. No output is written into worker My Drive.
+Progress reports file, MiB, percent and observed speed; it is not a guaranteed ETA.
+The full selected snapshot is retained for consistency (no speculative pruning
+of completed folds/backup slots). Live speed and GPU resume still need testing.
+
+Ordinary My Drive shared folders are NOT organizational Shared drives. A mount
+could be used for reads, but writes through a B mount are not a guarantee of A
+ownership. Actual Shared drives use organization ownership, not personal A
+ownership; migrating there requires a separate storage/permission decision.
+This update does not mount anything or move the project.
+
+Do not replace code in a running transfer/training process. Existing open
+copies don't auto-update. Use latest notebook for the next run; don't terminate
+the VM just to refresh code. Partial downloads are reusable only when the same
+local destination/identity is retained; a new notebook run chooses a fresh local
+work directory. No claim that a new run automatically reuses the old directory.
+
+Official references:
+- https://developers.google.com/workspace/drive/api/guides/manage-downloads
+- https://developers.google.com/workspace/drive/api/guides/about-shareddrives
 
 This is not activated by updating the Colab files. Owner A must deploy/authorize
 the web app. No OAuth tokens are sent to workers. Worker secrets are narrowly
@@ -64,7 +103,8 @@ implementation favors recoverability over space efficiency. One snapshot is
 limited to 300 files/30 GiB and an individual upload to 2 GiB.
 
 Payload upload uses a scoped resumable upload URI initiated by A; owner OAuth token
-never leaves Apps Script. Downloads use bounded 8 MiB authenticated relay ranges.
+never leaves Apps Script. Latest notebooks use bounded 8 MiB direct worker-authenticated
+Drive ranges. The old client still uses slower Apps Script relay ranges.
 Apps Script/Drive quotas and network costs still apply. Current Google docs list
 20,000 daily URL Fetch calls for consumer accounts and 6 minutes per execution;
 many parallel workers can exhaust quotas. Errors stop the trainer, not fall back
