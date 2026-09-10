@@ -9,24 +9,24 @@ def code(source, ident):
 intro = """# OpenDetect — Status Training Semua Skenario
 
 Dashboard **read-only** untuk A-1 sampai C-2. Notebook membaca snapshot terbaru
-di Drive akun worker yang sedang diautentikasi; tidak menjalankan training,
+yang sudah di-upload ke folder outputs milik Drive A; tidak menjalankan training,
 tidak meng-upload, dan tidak menghapus checkpoint.
 
 Status fold: SELESAI berarti seluruh artefak evaluasi tersedia; EPOCH n/100
-berarti checkpoint aktif; BELUM MULAI berarti belum ada checkpoint. Jika skenario
-dikerjakan akun berbeda, jalankan notebook sekali pada masing-masing akun.
+berarti checkpoint aktif; BELUM MULAI berarti belum ada checkpoint.
 """
 
 setup = r'''# @title 1. Login Drive worker dan siapkan pemeriksa
 from google.colab import auth, userdata
 import google.auth
 from googleapiclient.discovery import build
-import hashlib, json, requests
+import hashlib, json
 from IPython.display import display
 import pandas as pd
 
 SCENARIOS = ('A-1','A-2','A-3','B-1','B-2','B-3','C-1','C-2')
 FORMAT = 'worker-drive-v1'
+OWNER_OUTPUTS = '1o8-O578YTfc9FAwGKBZvDGJlzUYE7awI'
 FIELDS = 'id,name,mimeType,size,sha256Checksum,parents,owners(emailAddress),trashed,appProperties'
 auth.authenticate_user()
 credentials, _ = google.auth.default()
@@ -54,32 +54,27 @@ def read_json(record, parent):
         raise ValueError('checksum JSON Drive berbeda')
     return json.loads(raw)
 
-def a_generation(scenario):
-    try:
-        response = requests.post(userdata.get('OPENDETECT_RELAY_URL'),
-            json={'key':userdata.get('OPENDETECT_WORKER_KEY'), 'scenario':scenario,
-                  'lease':'monitor-read-only', 'action':'hello'}, timeout=30)
-        data = response.json()
-        return data['result']['generation'] if data.get('ok') else '?'
-    except Exception:
-        return 'secret tidak tersedia'
 '''
 
 dashboard = r'''# @title 2. Refresh dashboard semua skenario
 rows, details = [], {}
-root = children('root')
+scenario_folders = {f['name']:f for f in children(OWNER_OUTPUTS)}
 for scenario in SCENARIOS:
     try:
-        folders = [f for f in root if f['name'] == 'OpenDetect_WORKER_'+scenario
-                   and owned(f) and f.get('appProperties',{}).get('opendetect') == FORMAT]
-        if len(folders) != 1:
-            raise ValueError('folder tidak ada' if not folders else 'folder duplikat')
-        folder = folders[0]; objects = children(folder['id'])
-        pointers = [f for f in objects if f['name'] == 'CURRENT.json']
-        if len(pointers) != 1: raise ValueError('CURRENT.json tidak unik')
-        manifest = read_json(pointers[0], folder['id'])
-        if manifest.get('format') != FORMAT or manifest.get('scenario') != scenario:
-            raise ValueError('identitas manifest berbeda')
+        folder = scenario_folders.get(scenario)
+        if not folder: raise ValueError('folder skenario di A tidak ada')
+        relay = next((f for f in children(folder['id']) if f['name']=='_relay'), None)
+        if not relay: raise ValueError('snapshot relay di A tidak ada')
+        relay_children = children(relay['id'])
+        snapshots = next((f for f in relay_children if f['name']=='snapshots'), None)
+        object_folder = next((f for f in relay_children if f['name']=='objects'), None)
+        if not snapshots or not object_folder: raise ValueError('struktur snapshot A tidak lengkap')
+        generations = [(int(f['name'][11:-5]),f) for f in children(snapshots['id'])
+                       if f['name'].startswith('generation_') and f['name'].endswith('.json')]
+        if not generations: raise ValueError('belum ada generation di A')
+        generation, pointer = max(generations)
+        manifest = read_json(pointer, snapshots['id'])
+        objects = children(object_folder['id'])
         listed = {f['id']: f for f in objects}; files = manifest.get('files', [])
         invalid = [r['path'] for r in files if r['id'] not in listed or
                    int(listed[r['id']].get('size',-1)) != r['size'] or
@@ -87,7 +82,7 @@ for scenario in SCENARIOS:
         if invalid: raise ValueError(f'{len(invalid)} objek gagal verifikasi')
         paths = {r['path']: r for r in files}
         config_rec = paths.get('GROUPED_CONFIG.json')
-        config = read_json(listed[config_rec['id']], folder['id']) if config_rec else {}
+        config = read_json(listed[config_rec['id']], object_folder['id']) if config_rec else {}
         dataset, split = config.get('dataset','?'), config.get('split','?')
         fold_rows, completed = [], 0
         for fold in range(5):
@@ -96,7 +91,7 @@ for scenario in SCENARIOS:
                         f'results/{name}.scores.npz', f'state/{name}.completed.json')
             done = all(p in paths for p in required)
             if done:
-                marker = read_json(listed[paths[required[3]]['id']], folder['id'])
+                marker = read_json(listed[paths[required[3]]['id']], object_folder['id'])
                 done = (marker.get('config') == config and
                     marker.get('checkpoint_sha256') == paths[required[0]]['sha256'] and
                     marker.get('result_sha256') == paths[required[1]]['sha256'] and
@@ -104,33 +99,28 @@ for scenario in SCENARIOS:
             epoch = 100 if done else 0
             progress = paths.get(f'resume_state/{name}/progress.json')
             if progress:
-                progress_data = read_json(listed[progress['id']], folder['id'])
+                progress_data = read_json(listed[progress['id']], object_folder['id'])
                 epoch = int(progress_data.get('completed_epochs', 0))
             metrics = {}
             result = paths.get(f'results/{name}.json')
-            if result: metrics = read_json(listed[result['id']], folder['id'])
+            if result: metrics = read_json(listed[result['id']], object_folder['id'])
             completed += int(done)
             status = 'SELESAI' if done else (f'EPOCH {epoch}/100' if epoch else 'BELUM MULAI')
             fold_rows.append({'Fold':fold, 'Seed':2022+fold, 'Status':status, 'Epoch':epoch,
                 'Closed acc':metrics.get('closed_accuracy','—'),
                 'Closed F1':metrics.get('closed_f1','—'), 'AUROC':metrics.get('auroc','—'),
                 'Open acc':metrics.get('open_accuracy','—')})
-        receipt = manifest.get('receipt', {})
-        receipt_files = {r['path']:r['sha256'] for r in receipt.get('files', [])}
-        synced = bool(receipt) and all(receipt_files.get(r['path']) == r['sha256'] for r in files)
         active = next((x for x in fold_rows if 0 < x['Epoch'] < 100), None)
         rows.append({'Skenario':scenario, 'Fold selesai':f'{completed}/5',
             'Fold aktif':active['Fold'] if active else '—', 'Epoch aktif':active['Epoch'] if active else '—',
-            'Worker rev':manifest.get('revision','?'), 'Ukuran':f"{sum(r['size'] for r in files)/2**30:.2f} GiB",
-            'Upload A':'sinkron' if synced else 'belum terbaru', 'A generation':a_generation(scenario),
+            'A generation':generation, 'Ukuran snapshot':f"{sum(r['size'] for r in files)/2**30:.2f} GiB",
             'Catatan':''})
         details[scenario] = pd.DataFrame(fold_rows)
     except Exception as error:
         rows.append({'Skenario':scenario, 'Fold selesai':'—', 'Fold aktif':'—',
-            'Epoch aktif':'—', 'Worker rev':'—', 'Ukuran':'—', 'Upload A':'—',
-            'A generation':a_generation(scenario), 'Catatan':str(error)})
+            'Epoch aktif':'—', 'A generation':'—', 'Ukuran snapshot':'—', 'Catatan':str(error)})
 
-print('Akun worker:', WORKER_EMAIL)
+print('Drive A:', WORKER_EMAIL)
 display(pd.DataFrame(rows))
 for scenario, table in details.items():
     print('\n'+scenario); display(table)
