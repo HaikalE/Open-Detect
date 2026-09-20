@@ -6,3 +6,5 @@ results/
 save_model_v2/
 results_v2/
 experiments/
+pilot/reports/
+pilot/cache/
