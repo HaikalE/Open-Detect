@@ -1,6 +1,9 @@
 # Pilot temporal fusion — mulai di sini
 
-Status: **P0 / audit data CPU**, bukan training fusion dan bukan pengganti hasil replikasi.
+Status: **P0 selesai; P1 pairing pilot CPU tersedia**, bukan training fusion dan bukan pengganti hasil replikasi.
+
+Jika P0 sudah selesai, lanjut `02_PAIRING_PILOT_CPU.ipynb`; tidak perlu mengulang
+P0. Baca `P1_MULAI_DI_SINI.md` untuk cakupan dan batasan hasil kandidat.
 
 Jalankan `01_AUDIT_DATA_CPU.ipynb` di Colab, runtime CPU, dari atas ke bawah.
 Gunakan akun yang diberi akses ke folder sumber di Drive A. Akses berdasarkan ID
