@@ -58,6 +58,15 @@ class PairingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.extract([self.packet(2), self.packet(1)])
 
+    def test_microsecond_timestamp_quantization_is_explicit(self):
+        path = self.root/'Facetime.pcap'
+        wrpcap(str(path), [self.packet(2), self.packet(2-0.000001)])
+        rows, arrays, meta = extract_candidates(path, 'Facetime', timestamp_tolerance_us=2)
+        self.assertEqual(meta['timestamp_adjustments'], 1)
+        self.assertEqual(rows[0]['length'], 2)
+        self.assertEqual(arrays['sequences'][0,1,2], 0)
+        self.assertIn('tol2us', rows[0]['policy'])
+
     def test_bounded_scan_marked_partial(self):
         rows, _, meta = self.extract([self.packet(1), self.packet(2)], packet_limit=1)
         self.assertFalse(meta['complete'])

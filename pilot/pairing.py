@@ -41,7 +41,8 @@ def make_index(paths):
     return index, sources
 
 
-def extract_candidates(path, capture_class, packet_limit=200000, session_limit=10000):
+def extract_candidates(path, capture_class, packet_limit=200000, session_limit=10000,
+                       timestamp_tolerance_us=0):
     """Read in capture order; preserve exact decimal times before IAT subtraction.
 
     Biflow key: IP version, TCP/UDP, unordered endpoint pair. Split on idle>60s,
@@ -51,10 +52,14 @@ def extract_candidates(path, capture_class, packet_limit=200000, session_limit=1
     """
     from scapy.all import IP, IPv6, TCP, Padding, PcapReader
     from data.Preprocessing.utils import raw_packet_to_string
+    if timestamp_tolerance_us < 0:
+        raise ValueError('timestamp_tolerance_us must be nonnegative')
+    policy = POLICY if timestamp_tolerance_us == 0 else POLICY + f'-tol{timestamp_tolerance_us}us'
+    tolerance = Decimal(timestamp_tolerance_us) / Decimal(1000000)
     path = Path(path)
     capture_hash = sha_file(path)
     states, sessions, errors = {}, [], []
-    scanned = excluded = 0
+    scanned = excluded = timestamp_adjustments = 0
     complete = True
     with PcapReader(str(path)) as packets:
         for packet_id, packet in enumerate(packets):
@@ -81,16 +86,20 @@ def extract_candidates(path, capture_class, packet_limit=200000, session_limit=1
             syn = (src, int(transport.seq)) if TCP in ip and transport.flags.S and not transport.flags.A else None
             state = states.get(key)
             if state is not None and now < state['last']:
-                # Fail closed for the capture: a later invalid packet must not
-                # leave an earlier prefix looking like a verified session.
-                raise ValueError(f'Nonmonotonic per-biflow timestamp at packet {packet_id}')
+                if state['last'] - now <= tolerance:
+                    # Explicit quantization tolerance. Preserve packet order;
+                    # a sub-microsecond reversal contributes zero IAT.
+                    now = state['last']
+                    timestamp_adjustments += 1
+                else:
+                    raise ValueError(f'Nonmonotonic per-biflow timestamp at packet {packet_id}')
             new = state is None or now - state['last'] > 60 or state['reset'] or (
                 syn is not None and syn != state['syn'])
             if new:
                 if len(sessions) >= session_limit:
                     complete = False
                     break
-                identity = json.dumps([capture_hash, POLICY, key, packet_id], separators=(',', ':'))
+                identity = json.dumps([capture_hash, policy, key, packet_id], separators=(',', ':'))
                 state = {'id': hashlib.sha256(identity.encode()).hexdigest(), 'first': src,
                          'last': now, 'syn': syn, 'reset': False, 'blocks': [], 'seq': [],
                          'packet_ids': [], 'times': [], 'total': 0}
@@ -123,7 +132,7 @@ def extract_candidates(path, capture_class, packet_limit=200000, session_limit=1
                         'image_sha256': hashlib.sha256(image.tobytes()).hexdigest(),
                         'packet_indices': state['packet_ids'], 'timestamps_seconds': state['times'],
                         'length': n, 'session_observed_packets': state['total'],
-                        'capture_complete': complete, 'policy': POLICY, 'split': None,
+                        'capture_complete': complete, 'policy': policy, 'split': None,
                         'pairing_verified': False})
         images.append(image)
         sequences.append(seq)
@@ -134,7 +143,9 @@ def extract_candidates(path, capture_class, packet_limit=200000, session_limit=1
     arrays['mask'] = np.arange(8)[None,:] < arrays['lengths'][:,None]
     return records, arrays, {'capture_file': path.name, 'capture_sha256': capture_hash,
         'class': capture_class, 'packets_scanned': scanned, 'excluded_packets': excluded,
-        'sessions': len(records), 'complete': complete, 'errors': errors}
+        'sessions': len(records), 'complete': complete, 'policy': policy,
+        'timestamp_tolerance_us': timestamp_tolerance_us,
+        'timestamp_adjustments': timestamp_adjustments, 'errors': errors}
 
 
 def annotate_matches(records, index):
