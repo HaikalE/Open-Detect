@@ -5,6 +5,8 @@ Status: **P0 selesai; P1 pairing pilot CPU tersedia**, belum training fusion.
 P1 lanjutan lokal menemukan kandidat urutan paket/timestamp yang cocok persis
 dengan citra USTC. Baca `SOURCE_RECOVERY_2026-09-23.md` untuk hasil, batas
 cakupan, dan audit kebocoran flow sebelum membuat dataset training.
+Mini dataset flow-disjoint dan tes integrasi BiGRU dijelaskan di
+`MINI_FUSION_GATE_2026-09-23.md`; ini bukan evaluasi skenario tesis.
 
 Jika P0 sudah selesai, lanjut `02_PAIRING_PILOT_CPU.ipynb`; tidak perlu mengulang
 P0. Baca `P1_MULAI_DI_SINI.md` untuk cakupan dan batasan hasil kandidat.

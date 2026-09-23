@@ -110,7 +110,7 @@ class ResNet18Enc(nn.Module):
             self.in_planes = planes
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward_features(self, x):
         x = torch.relu(self.bn1(self.conv1(x)))
         x1 = self.layer1(x)
         x2 = self.layer2(x1)
@@ -118,15 +118,17 @@ class ResNet18Enc(nn.Module):
         x4 = self.layer4(x3)
         x = F.adaptive_avg_pool2d(x4, 1)
         x = x.view(x.size(0), -1)
-        mu = self.mu(x)
-        logvar = self.logvar(x)
         mid_x = {
             'x_l1': x1,
             'x_l2': x2,
             'x_l3': x3,
             'x_l4': x4,
         }
-        return mu, logvar, mid_x
+        return x, mid_x
+
+    def forward(self, x):
+        pooled, mid_x = self.forward_features(x)
+        return self.mu(pooled), self.logvar(pooled), mid_x
 
 
 class ResNet18Dec(nn.Module):
