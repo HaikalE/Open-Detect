@@ -5,7 +5,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PINNED_COMMIT = 'df64785'
+PINNED_COMMIT = '1fa2730'
+OUTPUT_NAME = '03_MINI_FUSION_SMOKE_CPU_V2.ipynb'
 
 
 def cell(kind, source):
@@ -76,11 +77,23 @@ subprocess.run(['git', 'clone', '--filter=blob:none', '--single-branch',
 subprocess.run(['git', '-C', str(REPO), 'checkout', '--detach', '{PINNED_COMMIT}'], check=True)
 head = subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', '--short=7', 'HEAD'], text=True).strip()
 assert head == '{PINNED_COMMIT}', head
-subprocess.run([sys.executable, '-m', 'unittest', 'tests.test_temporal_fusion',
-                'tests.test_mini_cohort', '-q'], cwd=REPO, check=True)
+print('Python:', sys.version)
+for pattern in ('test_temporal_fusion.py', 'test_mini_cohort.py'):
+    cmd = [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-p', pattern, '-v']
+    result = subprocess.run(cmd, cwd=REPO, text=True, capture_output=True)
+    print('TEST:', pattern, 'exit:', result.returncode)
+    print(result.stdout)
+    print(result.stderr)
+    if result.returncode:
+        raise RuntimeError('Test gagal; lihat error asli tepat di atas, bukan hanya CalledProcessError')
 OUT = WORK / 'mini_fusion_smoke_cpu.json'
-subprocess.run([sys.executable, '-m', 'pilot.smoke_mini_fusion', '--cohort-dir', str(COHORT),
-                '--output', str(OUT)], cwd=REPO, check=True)
+cmd = [sys.executable, '-m', 'pilot.smoke_mini_fusion', '--cohort-dir', str(COHORT),
+       '--output', str(OUT)]
+result = subprocess.run(cmd, cwd=REPO, text=True, capture_output=True)
+print(result.stdout)
+print(result.stderr)
+if result.returncode:
+    raise RuntimeError('Smoke gagal; lihat error asli tepat di atas')
 print('Smoke selesai; bukan training atau skor tesis:', OUT)
 '''),
         cell('code', '''result = json.loads(OUT.read_text())
@@ -92,12 +105,12 @@ print('Jangan bandingkan one-batch loss sebagai performa model.')
     ]
     return {'nbformat': 4, 'nbformat_minor': 5,
             'metadata': {'kernelspec': {'display_name': 'Python 3', 'language': 'python', 'name': 'python3'},
-                         'colab': {'name': '03_MINI_FUSION_SMOKE_CPU.ipynb'}},
+                         'colab': {'name': OUTPUT_NAME}},
             'cells': cells}
 
 
 if __name__ == '__main__':
-    output = ROOT / 'pilot/03_MINI_FUSION_SMOKE_CPU.ipynb'
+    output = ROOT / 'pilot' / OUTPUT_NAME
     with output.open('x', encoding='utf-8') as handle:
         json.dump(build(), handle, indent=1, ensure_ascii=False)
     print(output)
