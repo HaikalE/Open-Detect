@@ -7,6 +7,8 @@ dengan citra USTC. Baca `SOURCE_RECOVERY_2026-09-23.md` untuk hasil, batas
 cakupan, dan audit kebocoran flow sebelum membuat dataset training.
 Mini dataset flow-disjoint dan tes integrasi BiGRU dijelaskan di
 `MINI_FUSION_GATE_2026-09-23.md`; ini bukan evaluasi skenario tesis.
+Untuk mengulang smoke test di Colab CPU dari artefak Drive P2, jalankan
+`03_MINI_FUSION_SMOKE_CPU.ipynb` berurutan; tidak ada training penuh.
 
 Jika P0 sudah selesai, lanjut `02_PAIRING_PILOT_CPU.ipynb`; tidak perlu mengulang
 P0. Baca `P1_MULAI_DI_SINI.md` untuk cakupan dan batasan hasil kandidat.
