@@ -13,7 +13,7 @@ Unknown Tinba is held out for test and cannot affect selection. The report
 includes known closed-set scores plus open-set AUROC, known acceptance, unknown
 rejection, training curves, and runtime for one seed.
 
-Run `04_MINI_OPENSET_TRAIN_CPU.ipynb` from a fresh CPU or GPU Colab runtime. It
+Run `04_MINI_OPENSET_TRAIN_CPU_V2.ipynb` from a fresh CPU or GPU Colab runtime. It
 requires the verified P2 cohort files and checks their checksums before training.
 Scope remains four known classes plus one unknown from bounded PCAP prefixes.
 Treat all metrics as feasibility results, not as scenario A-1 or thesis claims.

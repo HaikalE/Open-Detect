@@ -10,6 +10,8 @@ Mini dataset flow-disjoint dan tes integrasi BiGRU dijelaskan di
 Untuk mengulang smoke test di Colab CPU dari artefak Drive P2, jalankan
 `03_MINI_FUSION_SMOKE_CPU_V2.ipynb` berurutan; ini memperbaiki pemanggilan tes
 di Colab dan tidak menjalankan training penuh.
+Smoke sudah lolos. Tahap berikutnya adalah training feasibility terbatas di
+`04_MINI_OPENSET_TRAIN_CPU_V2.ipynb`; metriknya bukan hasil tesis.
 
 Jika P0 sudah selesai, lanjut `02_PAIRING_PILOT_CPU.ipynb`; tidak perlu mengulang
 P0. Baca `P1_MULAI_DI_SINI.md` untuk cakupan dan batasan hasil kandidat.
