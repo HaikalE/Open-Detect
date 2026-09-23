@@ -127,6 +127,7 @@ def _run_arm(arm, model, loaders, device, max_epochs, patience, learning_rate, l
     best_state, best_accuracy, best_loss, best_epoch, stale = None, -1.0, float('inf'), -1, 0
     history = []
     start_time = time.perf_counter()
+    print(f'{arm}: training on {len(loaders["train"].dataset)} samples; device={device}', flush=True)
     for epoch in range(max_epochs):
         model.train()
         seen, loss_sum = 0, 0.0
@@ -166,6 +167,8 @@ def _run_arm(arm, model, loaders, device, max_epochs, patience, learning_rate, l
         val_accuracy = val_correct / val_seen
         history.append({'epoch': epoch + 1, 'train_loss': loss_sum / seen,
                         'val_loss': val_loss, 'val_accuracy': val_accuracy})
+        print(f'{arm}: epoch {epoch + 1}/{max_epochs} train_loss={loss_sum / seen:.5f} '
+              f'val_loss={val_loss:.5f} val_accuracy={val_accuracy:.4f}', flush=True)
         if val_accuracy > best_accuracy or (val_accuracy == best_accuracy and val_loss < best_loss):
             best_accuracy, best_loss, best_epoch, stale = val_accuracy, val_loss, epoch + 1, 0
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
@@ -244,6 +247,7 @@ def run(cohort_dir, output, epochs=8, patience=2, batch_size=128, seed=2022,
         device = torch.device(device_name)
         if device.type == 'cuda' and not torch.cuda.is_available():
             raise RuntimeError('CUDA requested but unavailable')
+    torch.set_num_threads(min(4, max(1, torch.get_num_threads())))
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
